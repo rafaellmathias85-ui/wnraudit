@@ -1,0 +1,2257 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: WNR-Audit API — Microsoft tenant security auditing
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: account
+    description: Customer account operations
+  - name: tenants
+    description: Microsoft tenant connections
+  - name: scans
+    description: Security scans
+  - name: findings
+    description: Scan findings (vulnerabilities)
+  - name: dashboard
+    description: Dashboard aggregates
+  - name: firewalls
+    description: Dispositivos de firewall on-premise
+  - name: servers
+    description: Servidores on-premise
+  - name: external
+    description: Ativos públicos (IP/DDNS) — análise de superfície externa
+  - name: security-center
+    description: Visão SIEM consolidada de eventos e vulnerabilidades
+  - name: reports
+    description: Geração de relatórios PDF
+  - name: users
+    description: Gestão de usuários da plataforma (super admin)
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /me:
+    get:
+      operationId: getMe
+      tags: [account]
+      summary: Get current customer profile
+      responses:
+        "200":
+          description: Customer profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /tenants:
+    get:
+      operationId: listTenants
+      tags: [tenants]
+      summary: List connected Microsoft tenants
+      responses:
+        "200":
+          description: List of tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tenant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createTenant
+      tags: [tenants]
+      summary: Register a Microsoft tenant manually
+      description: Creates a tenant record. OAuth consent is completed separately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantBody"
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /tenants/{tenantId}:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTenant
+      tags: [tenants]
+      summary: Get tenant details
+      responses:
+        "200":
+          description: Tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteTenant
+      tags: [tenants]
+      summary: Disconnect a tenant
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tenants/{tenantId}/oauth-url:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTenantOAuthUrl
+      tags: [tenants]
+      summary: Get the Microsoft admin-consent URL for a tenant
+      responses:
+        "200":
+          description: OAuth admin consent URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthUrl"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tenants/{tenantId}/provision/app:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: connectTenantWithApp
+      tags: [tenants]
+      summary: Connect tenant using manually-created Azure App Registration (client credentials flow)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectTenantWithAppBody"
+      responses:
+        "200":
+          description: Tenant connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PollTenantProvisionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /tenants/{tenantId}/provision/oauth/start:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: startOAuthProvision
+      tags: [tenants]
+      summary: Generate Microsoft admin consent URL for automatic OAuth provisioning
+      responses:
+        "200":
+          description: Admin consent URL generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartOAuthProvisionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /tenants/{tenantId}/provision/credentials:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: provisionTenantWithCredentials
+      tags: [tenants]
+      summary: Provision App Registration using Global Admin credentials (ROPC — password never stored)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProvisionWithCredentialsBody"
+      responses:
+        "200":
+          description: Provisioning result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PollTenantProvisionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /tenants/{tenantId}/provision/start:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: startTenantProvision
+      tags: [tenants]
+      summary: Start Device Code Flow to auto-provision App Registration in tenant
+      responses:
+        "200":
+          description: Device code returned — user must enter code at Microsoft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartTenantProvisionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /tenants/{tenantId}/provision/poll:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: pollTenantProvision
+      tags: [tenants]
+      summary: Poll provisioning status and trigger app registration creation once authenticated
+      responses:
+        "200":
+          description: Provisioning status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PollTenantProvisionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tenants/{tenantId}/reconnect:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: reconnectTenant
+      tags: [tenants]
+      summary: Reset tenant connection so credentials can be re-entered
+      responses:
+        "200":
+          description: Tenant reset to pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tenants/{tenantId}/scans:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listTenantScans
+      tags: [scans]
+      summary: List scans for a tenant
+      responses:
+        "200":
+          description: Scans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Scan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: startTenantScan
+      tags: [scans]
+      summary: Start a new scan for a tenant
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartTenantScanBody"
+      responses:
+        "201":
+          description: Scan started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /scans/{scanId}:
+    parameters:
+      - name: scanId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getScan
+      tags: [scans]
+      summary: Get scan details
+      responses:
+        "200":
+          description: Scan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /scans/{scanId}/findings:
+    parameters:
+      - name: scanId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: severity
+        in: query
+        required: false
+        schema:
+          $ref: "#/components/schemas/Severity"
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: "#/components/schemas/FindingStatus"
+    get:
+      operationId: listScanFindings
+      tags: [findings]
+      summary: List findings for a scan
+      responses:
+        "200":
+          description: Findings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Finding"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /findings/{findingId}:
+    parameters:
+      - name: findingId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getFinding
+      tags: [findings]
+      summary: Get a finding with full remediation guidance
+      responses:
+        "200":
+          description: Finding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FindingDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateFindingStatus
+      tags: [findings]
+      summary: Update finding status (resolved / ignored / open)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFindingStatusBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Finding"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Aggregate stats across all tenants for the current customer
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /dashboard/recent-findings:
+    get:
+      operationId: getRecentFindings
+      tags: [dashboard]
+      summary: Most recent open findings across all tenants (top 10)
+      responses:
+        "200":
+          description: Recent findings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RecentFinding"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /dashboard/severity-breakdown:
+    get:
+      operationId: getSeverityBreakdown
+      tags: [dashboard]
+      summary: Open findings grouped by severity
+      responses:
+        "200":
+          description: Severity breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SeverityCount"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /dashboard/category-breakdown:
+    get:
+      operationId: getCategoryBreakdown
+      tags: [dashboard]
+      summary: Open findings grouped by CIS category
+      responses:
+        "200":
+          description: Category breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CategoryCount"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /firewalls:
+    get:
+      operationId: listFirewalls
+      tags: [firewalls]
+      summary: Listar firewalls cadastrados
+      responses:
+        "200":
+          description: Lista de firewalls
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FirewallDevice"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createFirewall
+      tags: [firewalls]
+      summary: Cadastrar novo firewall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFirewallBody"
+      responses:
+        "201":
+          description: Firewall criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FirewallDevice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /firewalls/{deviceId}:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getFirewall
+      tags: [firewalls]
+      summary: Detalhes do firewall
+      responses:
+        "200":
+          description: Firewall
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FirewallDeviceDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteFirewall
+      tags: [firewalls]
+      summary: Remover firewall
+      responses:
+        "204":
+          description: Removido
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /firewalls/{deviceId}/scans:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listFirewallScans
+      tags: [firewalls]
+      summary: Listar varreduras do firewall
+      responses:
+        "200":
+          description: Varreduras
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeviceScan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: startFirewallScan
+      tags: [firewalls]
+      summary: Iniciar varredura no firewall
+      responses:
+        "201":
+          description: Varredura iniciada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceScan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /firewall-scans/{scanId}:
+    parameters:
+      - name: scanId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getFirewallScan
+      tags: [firewalls]
+      summary: Detalhes de varredura de firewall
+      responses:
+        "200":
+          description: Detalhes da varredura
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceScanDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /servers:
+    get:
+      operationId: listServers
+      tags: [servers]
+      summary: Listar servidores on-premise cadastrados
+      responses:
+        "200":
+          description: Lista de servidores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServerDevice"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createServer
+      tags: [servers]
+      summary: Cadastrar novo servidor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServerBody"
+      responses:
+        "201":
+          description: Servidor criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerDevice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /servers/{deviceId}:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getServer
+      tags: [servers]
+      summary: Detalhes do servidor
+      responses:
+        "200":
+          description: Servidor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerDeviceDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteServer
+      tags: [servers]
+      summary: Remover servidor
+      responses:
+        "204":
+          description: Removido
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /servers/{deviceId}/scans:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listServerScans
+      tags: [servers]
+      summary: Listar varreduras do servidor
+      responses:
+        "200":
+          description: Varreduras
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeviceScan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: startServerScan
+      tags: [servers]
+      summary: Iniciar varredura no servidor
+      responses:
+        "201":
+          description: Varredura iniciada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceScan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /server-scans/{scanId}:
+    parameters:
+      - name: scanId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getServerScan
+      tags: [servers]
+      summary: Detalhes de varredura de servidor
+      responses:
+        "200":
+          description: Detalhes da varredura
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceScanDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tenants/{tenantId}/licenses:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listTenantLicenses
+      tags: [inquiries]
+      summary: Listar licenças (subscribedSkus) do tenant via Microsoft Graph
+      responses:
+        "200":
+          description: Licenças do tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantLicensesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /tenants/{tenantId}/inquiries:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listTenantInquiries
+      tags: [inquiries]
+      summary: Listar consultas anteriores do tenant
+      responses:
+        "200":
+          description: Lista de consultas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TenantInquiry"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createTenantInquiry
+      tags: [inquiries]
+      summary: Fazer uma nova consulta sobre serviços/configurações Microsoft 365
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInquiryBody"
+      responses:
+        "201":
+          description: Consulta respondida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantInquiry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /tenants/{tenantId}/inquiries/{inquiryId}:
+    parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: inquiryId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTenantInquiry
+      tags: [inquiries]
+      summary: Detalhes de uma consulta
+      responses:
+        "200":
+          description: Consulta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantInquiry"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: Listar todos os usuários (apenas super admin)
+      responses:
+        "200":
+          description: Lista de usuários
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /users/invite:
+    post:
+      operationId: inviteUser
+      tags: [users]
+      summary: Convidar novo usuário por e-mail (cria registro pendente)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteUserBody"
+      responses:
+        "201":
+          description: Usuário convidado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /users/{userId}/approve:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: approveUser
+      tags: [users]
+      summary: Aprovar acesso de um usuário pendente
+      responses:
+        "200":
+          description: Usuário aprovado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /users/{userId}/block:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: blockUser
+      tags: [users]
+      summary: Bloquear acesso de um usuário
+      responses:
+        "200":
+          description: Usuário bloqueado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      summary: Excluir um usuário e todos os dados associados
+      responses:
+        "204":
+          description: Usuário excluído
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /external-assets:
+    get:
+      operationId: listExternalAssets
+      tags: [external]
+      summary: Listar ativos externos cadastrados
+      responses:
+        "200":
+          description: Lista de ativos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ExternalAsset"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createExternalAsset
+      tags: [external]
+      summary: Cadastrar novo ativo externo (IP, DDNS, etc.)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExternalAssetBody"
+      responses:
+        "201":
+          description: Ativo criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExternalAsset"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /external-assets/{assetId}:
+    parameters:
+      - name: assetId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getExternalAsset
+      tags: [external]
+      summary: Detalhes de um ativo externo
+      responses:
+        "200":
+          description: Detalhes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExternalAssetDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteExternalAsset
+      tags: [external]
+      summary: Excluir um ativo externo
+      responses:
+        "204":
+          description: Excluído
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /external-assets/{assetId}/scans:
+    parameters:
+      - name: assetId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listExternalAssetScans
+      tags: [external]
+      summary: Listar varreduras de um ativo
+      responses:
+        "200":
+          description: Varreduras
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeviceScan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: startExternalAssetScan
+      tags: [external]
+      summary: Iniciar varredura externa
+      responses:
+        "201":
+          description: Varredura iniciada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceScan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /external-scans/{scanId}:
+    parameters:
+      - name: scanId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getExternalScan
+      tags: [external]
+      summary: Detalhes da varredura externa com findings
+      responses:
+        "200":
+          description: Detalhes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceScanDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /security-center/summary:
+    get:
+      operationId: getSecurityCenterSummary
+      tags: [security-center]
+      summary: Sumário consolidado para o painel SIEM
+      responses:
+        "200":
+          description: Sumário
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityCenterSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /security-center/events:
+    get:
+      operationId: listSecurityCenterEvents
+      tags: [security-center]
+      summary: Listar eventos consolidados (M365, dispositivos e externos)
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SecurityEventSource"
+        - name: severity
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Severity"
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            minimum: 1
+            maximum: 1000
+      responses:
+        "200":
+          description: Eventos consolidados
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityEvent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reports/security-center:
+    get:
+      operationId: getSecurityCenterReport
+      tags: [reports]
+      summary: Exportar PDF consolidado do Security Center
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SecurityEventSource"
+        - name: severity
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Severity"
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PDF
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Conflict (already exists)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Forbidden — caller does not have required role
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadGateway:
+      description: Bad gateway — upstream Microsoft API error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Service unavailable — required configuration missing
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    Severity:
+      type: string
+      enum: [critical, high, medium, low, info]
+
+    FindingStatus:
+      type: string
+      enum: [open, ignored, resolved]
+
+    TenantStatus:
+      type: string
+      enum: [pending, connected, error, disconnected]
+
+    ScanStatus:
+      type: string
+      enum: [pending, running, completed, failed]
+
+    ScanMode:
+      type: string
+      enum: [simple, advanced]
+
+    CloudScope:
+      type: string
+      enum: [m365, azure, both]
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+        clerkUserId:
+          type: string
+        email:
+          type: string
+        organizationName:
+          type: string
+          nullable: true
+        fullName:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/UserStatus"
+        role:
+          $ref: "#/components/schemas/UserRole"
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, clerkUserId, email, status, role, createdAt]
+
+    UserStatus:
+      type: string
+      enum: [pending, active, blocked]
+
+    UserRole:
+      type: string
+      enum: [super_admin, user]
+
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: string
+        microsoftTenantId:
+          type: string
+        displayName:
+          type: string
+        primaryDomain:
+          type: string
+          nullable: true
+        scope:
+          $ref: "#/components/schemas/CloudScope"
+        status:
+          $ref: "#/components/schemas/TenantStatus"
+        lastScanAt:
+          type: string
+          format: date-time
+          nullable: true
+        openFindingsCount:
+          type: integer
+        criticalFindingsCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - microsoftTenantId
+        - displayName
+        - scope
+        - status
+        - openFindingsCount
+        - criticalFindingsCount
+        - createdAt
+
+    TenantDetails:
+      allOf:
+        - $ref: "#/components/schemas/Tenant"
+        - type: object
+          properties:
+            recentScans:
+              type: array
+              items:
+                $ref: "#/components/schemas/Scan"
+          required: [recentScans]
+
+    TenantLicenseSku:
+      type: object
+      properties:
+        skuId:
+          type: string
+        skuPartNumber:
+          type: string
+        displayName:
+          type: string
+          nullable: true
+        prepaidUnits:
+          type: integer
+        consumedUnits:
+          type: integer
+        servicePlans:
+          type: array
+          items:
+            type: object
+            properties:
+              servicePlanId:
+                type: string
+              servicePlanName:
+                type: string
+              provisioningStatus:
+                type: string
+            required: [servicePlanId, servicePlanName, provisioningStatus]
+      required: [skuId, skuPartNumber, prepaidUnits, consumedUnits, servicePlans]
+
+    TenantLicensesResponse:
+      type: object
+      properties:
+        skus:
+          type: array
+          items:
+            $ref: "#/components/schemas/TenantLicenseSku"
+      required: [skus]
+
+    TenantInquiry:
+      type: object
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        question:
+          type: string
+        answer:
+          type: string
+        serviceDetected:
+          type: string
+          nullable: true
+        licenseSummary:
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, tenantId, question, answer, createdAt]
+
+    CreateInquiryBody:
+      type: object
+      properties:
+        question:
+          type: string
+          minLength: 3
+      required: [question]
+
+    CreateTenantBody:
+      type: object
+      properties:
+        microsoftTenantId:
+          type: string
+          description: GUID or domain of the Microsoft tenant
+        displayName:
+          type: string
+        primaryDomain:
+          type: string
+          nullable: true
+        scope:
+          $ref: "#/components/schemas/CloudScope"
+      required: [microsoftTenantId, displayName, scope]
+
+    OAuthUrl:
+      type: object
+      properties:
+        url:
+          type: string
+        state:
+          type: string
+      required: [url, state]
+
+    ConnectTenantWithAppBody:
+      type: object
+      properties:
+        clientId:
+          type: string
+          description: Application (client) ID do App Registration no Azure AD
+        clientSecret:
+          type: string
+          description: Client Secret do App Registration — nunca armazenado em texto claro
+      required: [clientId, clientSecret]
+
+    StartOAuthProvisionResponse:
+      type: object
+      properties:
+        authUrl:
+          type: string
+          description: URL de admin consent da Microsoft para redirecionar o browser
+      required: [authUrl]
+
+    ProvisionWithCredentialsBody:
+      type: object
+      properties:
+        username:
+          type: string
+          description: E-mail do Administrador Global (UPN)
+        password:
+          type: string
+          description: Senha do Administrador Global — nunca armazenada
+      required: [username, password]
+
+    StartTenantProvisionResponse:
+      type: object
+      properties:
+        userCode:
+          type: string
+        verificationUri:
+          type: string
+        expiresAt:
+          type: number
+        message:
+          type: string
+      required: [userCode, verificationUri, expiresAt, message]
+
+    PollTenantProvisionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending, completed, expired, declined, error, provisioning]
+        appId:
+          type: string
+          nullable: true
+        permissionsGranted:
+          type: array
+          items:
+            type: string
+          nullable: true
+        permissionsFailed:
+          type: array
+          items:
+            type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+      required: [status]
+
+    Scan:
+      type: object
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        status:
+          $ref: "#/components/schemas/ScanStatus"
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        totalChecks:
+          type: integer
+        passedChecks:
+          type: integer
+        failedChecks:
+          type: integer
+        criticalCount:
+          type: integer
+        highCount:
+          type: integer
+        mediumCount:
+          type: integer
+        lowCount:
+          type: integer
+        scanMode:
+          $ref: "#/components/schemas/ScanMode"
+      required:
+        - id
+        - tenantId
+        - status
+        - startedAt
+        - totalChecks
+        - passedChecks
+        - failedChecks
+        - criticalCount
+        - highCount
+        - mediumCount
+        - lowCount
+        - scanMode
+
+    StartTenantScanBody:
+      type: object
+      properties:
+        mode:
+          $ref: "#/components/schemas/ScanMode"
+
+    ScanDetails:
+      allOf:
+        - $ref: "#/components/schemas/Scan"
+        - type: object
+          properties:
+            tenantName:
+              type: string
+            findings:
+              type: array
+              items:
+                $ref: "#/components/schemas/Finding"
+            controls:
+              type: array
+              description: Catálogo completo dos controles avaliados, com status pass/fail.
+              items:
+                $ref: "#/components/schemas/ScanControl"
+          required: [tenantName, findings, controls]
+
+    ScanControl:
+      type: object
+      description: Item do catálogo CIS avaliado nesta varredura.
+      properties:
+        controlId:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        affectedResource:
+          type: string
+          nullable: true
+        recommendation:
+          type: string
+          description: O que o tenant deve ter configurado para passar neste controle.
+        status:
+          type: string
+          enum: [passed, failed]
+        findingId:
+          type: string
+          nullable: true
+          description: ID da vulnerabilidade aberta (apenas quando status=failed).
+      required: [controlId, title, category, severity, recommendation, status]
+
+    Finding:
+      type: object
+      properties:
+        id:
+          type: string
+        scanId:
+          type: string
+        controlId:
+          type: string
+          description: CIS Benchmark control id (e.g. "1.1.1")
+        title:
+          type: string
+        category:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          $ref: "#/components/schemas/FindingStatus"
+        affectedResource:
+          type: string
+          nullable: true
+        detectedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - scanId
+        - controlId
+        - title
+        - category
+        - severity
+        - status
+        - detectedAt
+
+    FindingDetails:
+      allOf:
+        - $ref: "#/components/schemas/Finding"
+        - type: object
+          properties:
+            description:
+              type: string
+            rationale:
+              type: string
+            remediation:
+              type: string
+            references:
+              type: array
+              items:
+                type: string
+            evidence:
+              type: object
+              additionalProperties: true
+              nullable: true
+            tenantName:
+              type: string
+            configPath:
+              type: string
+              nullable: true
+          required:
+            - description
+            - rationale
+            - remediation
+            - references
+            - tenantName
+
+    UpdateFindingStatusBody:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/FindingStatus"
+        note:
+          type: string
+          nullable: true
+      required: [status]
+
+    DashboardSummary:
+      type: object
+      properties:
+        tenantsCount:
+          type: integer
+        connectedTenantsCount:
+          type: integer
+        scansCount:
+          type: integer
+        openFindingsCount:
+          type: integer
+        criticalOpenCount:
+          type: integer
+        highOpenCount:
+          type: integer
+        resolvedFindingsCount:
+          type: integer
+        averageScore:
+          type: number
+          description: Average compliance score (0-100) across the most recent scan of each tenant
+        lastScanAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - tenantsCount
+        - connectedTenantsCount
+        - scansCount
+        - openFindingsCount
+        - criticalOpenCount
+        - highOpenCount
+        - resolvedFindingsCount
+        - averageScore
+
+    RecentFinding:
+      type: object
+      properties:
+        id:
+          type: string
+        controlId:
+          type: string
+        title:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        tenantId:
+          type: string
+        tenantName:
+          type: string
+        detectedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - controlId
+        - title
+        - severity
+        - tenantId
+        - tenantName
+        - detectedAt
+
+    SeverityCount:
+      type: object
+      properties:
+        severity:
+          $ref: "#/components/schemas/Severity"
+        count:
+          type: integer
+      required: [severity, count]
+
+    CategoryCount:
+      type: object
+      properties:
+        category:
+          type: string
+        count:
+          type: integer
+      required: [category, count]
+
+    FirewallManufacturer:
+      type: string
+      enum:
+        - cisco
+        - fortinet
+        - sophos
+        - ubiquiti
+        - tp-link
+        - pfsense
+        - checkpoint
+        - palo-alto
+        - meraki
+        - other
+
+    ServerOs:
+      type: string
+      enum:
+        - windows-server
+        - ubuntu
+        - debian
+        - rhel
+        - centos
+        - rocky-linux
+        - suse
+        - other
+
+    DeviceType:
+      type: string
+      enum:
+        - firewall
+        - server
+        - external
+
+    FirewallDevice:
+      type: object
+      properties:
+        id:
+          type: string
+        customerId:
+          type: string
+        name:
+          type: string
+        manufacturer:
+          $ref: "#/components/schemas/FirewallManufacturer"
+        model:
+          type: string
+          nullable: true
+        ipAddress:
+          type: string
+          nullable: true
+        firmwareVersion:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        lastScanAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, customerId, name, manufacturer, createdAt, updatedAt]
+
+    FirewallDeviceDetails:
+      allOf:
+        - $ref: "#/components/schemas/FirewallDevice"
+        - type: object
+          properties:
+            recentScans:
+              type: array
+              items:
+                $ref: "#/components/schemas/DeviceScan"
+          required: [recentScans]
+
+    CreateFirewallBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+        manufacturer:
+          $ref: "#/components/schemas/FirewallManufacturer"
+        model:
+          type: string
+        ipAddress:
+          type: string
+        firmwareVersion:
+          type: string
+        location:
+          type: string
+        notes:
+          type: string
+      required: [name, manufacturer]
+
+    ServerDevice:
+      type: object
+      properties:
+        id:
+          type: string
+        customerId:
+          type: string
+        name:
+          type: string
+        hostname:
+          type: string
+        os:
+          $ref: "#/components/schemas/ServerOs"
+        osVersion:
+          type: string
+          nullable: true
+        ipAddress:
+          type: string
+          nullable: true
+        role:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        lastScanAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, customerId, name, hostname, os, createdAt, updatedAt]
+
+    ServerDeviceDetails:
+      allOf:
+        - $ref: "#/components/schemas/ServerDevice"
+        - type: object
+          properties:
+            recentScans:
+              type: array
+              items:
+                $ref: "#/components/schemas/DeviceScan"
+          required: [recentScans]
+
+    CreateServerBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+        hostname:
+          type: string
+          minLength: 1
+        os:
+          $ref: "#/components/schemas/ServerOs"
+        osVersion:
+          type: string
+        ipAddress:
+          type: string
+        role:
+          type: string
+        notes:
+          type: string
+      required: [name, hostname, os]
+
+    DeviceScan:
+      type: object
+      properties:
+        id:
+          type: string
+        deviceId:
+          type: string
+        deviceType:
+          $ref: "#/components/schemas/DeviceType"
+        status:
+          $ref: "#/components/schemas/ScanStatus"
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        totalChecks:
+          type: integer
+        passedChecks:
+          type: integer
+        failedChecks:
+          type: integer
+        criticalCount:
+          type: integer
+        highCount:
+          type: integer
+        mediumCount:
+          type: integer
+        lowCount:
+          type: integer
+      required:
+        - id
+        - deviceId
+        - deviceType
+        - status
+        - startedAt
+        - totalChecks
+        - passedChecks
+        - failedChecks
+        - criticalCount
+        - highCount
+        - mediumCount
+        - lowCount
+
+    DeviceScanDetails:
+      allOf:
+        - $ref: "#/components/schemas/DeviceScan"
+        - type: object
+          properties:
+            deviceName:
+              type: string
+            findings:
+              type: array
+              items:
+                $ref: "#/components/schemas/DeviceFinding"
+            controls:
+              type: array
+              items:
+                $ref: "#/components/schemas/DeviceControl"
+          required: [deviceName, findings, controls]
+
+    DeviceFinding:
+      type: object
+      properties:
+        id:
+          type: string
+        deviceScanId:
+          type: string
+        controlId:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          $ref: "#/components/schemas/FindingStatus"
+        affectedResource:
+          type: string
+          nullable: true
+        detectedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deviceScanId
+        - controlId
+        - title
+        - category
+        - severity
+        - status
+        - detectedAt
+
+    DeviceControl:
+      type: object
+      properties:
+        controlId:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        affectedResource:
+          type: string
+          nullable: true
+        recommendation:
+          type: string
+        status:
+          type: string
+          enum: [passed, failed]
+        findingId:
+          type: string
+          nullable: true
+      required: [controlId, title, category, severity, recommendation, status]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        fullName:
+          type: string
+          nullable: true
+        organizationName:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/UserStatus"
+        role:
+          $ref: "#/components/schemas/UserRole"
+        approvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, email, status, role, createdAt]
+
+    InviteUserBody:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        fullName:
+          type: string
+      required: [email]
+
+    ExternalAssetKind:
+      type: string
+      enum: [firewall, server, web, api, other]
+
+    ExternalAsset:
+      type: object
+      properties:
+        id:
+          type: string
+        customerId:
+          type: string
+        name:
+          type: string
+        kind:
+          $ref: "#/components/schemas/ExternalAssetKind"
+        host:
+          type: string
+        port:
+          type: integer
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        lastScanAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, customerId, name, kind, host, createdAt, updatedAt]
+
+    ExternalAssetDetails:
+      allOf:
+        - $ref: "#/components/schemas/ExternalAsset"
+        - type: object
+          properties:
+            recentScans:
+              type: array
+              items:
+                $ref: "#/components/schemas/DeviceScan"
+          required: [recentScans]
+
+    CreateExternalAssetBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+        kind:
+          $ref: "#/components/schemas/ExternalAssetKind"
+        host:
+          type: string
+          minLength: 1
+          description: IP público, DDNS ou hostname
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          nullable: true
+        notes:
+          type: string
+      required: [name, kind, host]
+
+    SecurityEventSource:
+      type: string
+      enum: [m365, firewall, server, external]
+
+    SecurityEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        source:
+          $ref: "#/components/schemas/SecurityEventSource"
+        scanId:
+          type: string
+        controlId:
+          type: string
+        title:
+          type: string
+        category:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          $ref: "#/components/schemas/FindingStatus"
+        targetName:
+          type: string
+        affectedResource:
+          type: string
+          nullable: true
+        detectedAt:
+          type: string
+          format: date-time
+        detailUrl:
+          type: string
+          description: Caminho na interface para abrir o detalhe (frontend)
+      required:
+        - id
+        - source
+        - scanId
+        - controlId
+        - title
+        - category
+        - severity
+        - status
+        - targetName
+        - detectedAt
+        - detailUrl
+
+    SecurityCenterSummary:
+      type: object
+      properties:
+        totalEvents:
+          type: integer
+        criticalCount:
+          type: integer
+        highCount:
+          type: integer
+        mediumCount:
+          type: integer
+        lowCount:
+          type: integer
+        infoCount:
+          type: integer
+        bySource:
+          type: array
+          items:
+            type: object
+            properties:
+              source:
+                $ref: "#/components/schemas/SecurityEventSource"
+              count:
+                type: integer
+            required: [source, count]
+        topCategories:
+          type: array
+          items:
+            $ref: "#/components/schemas/CategoryCount"
+        recentEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityEvent"
+      required:
+        - totalEvents
+        - criticalCount
+        - highCount
+        - mediumCount
+        - lowCount
+        - infoCount
+        - bySource
+        - topCategories
+        - recentEvents
