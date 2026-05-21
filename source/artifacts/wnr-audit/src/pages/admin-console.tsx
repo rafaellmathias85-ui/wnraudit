@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   AppWindow,
   Ban,
   CheckCircle2,
+  ExternalLink,
   KeyRound,
   Loader2,
   Plus,
@@ -68,6 +70,13 @@ type DirectoryApplication = {
   displayName: string | null;
   signInAudience: string | null;
   createdDateTime: string | null;
+};
+
+type PermissionStatus = {
+  roles: string[];
+  requiredRoles: string[];
+  missingRoles: string[];
+  ready: boolean;
 };
 
 type AdminEntity = "user" | "group" | "application";
@@ -156,9 +165,16 @@ export default function AdminConsole() {
       apiFetch<GraphList<DirectoryApplication>>(`/admin-console/tenants/${tenantId}/applications`),
   });
 
+  const permissionsQuery = useQuery({
+    queryKey: queryKey(tenantId || null, "permissions"),
+    enabled: Boolean(tenantId),
+    queryFn: () => apiFetch<PermissionStatus>(`/admin-console/tenants/${tenantId}/permissions`),
+  });
+
   const refreshActive = () => {
     const scope = activeTab === "users" ? "users" : activeTab === "groups" ? "groups" : "applications";
     queryClient.invalidateQueries({ queryKey: queryKey(tenantId || null, scope) });
+    queryClient.invalidateQueries({ queryKey: queryKey(tenantId || null, "permissions") });
     if (scope === "users") {
       queryClient.invalidateQueries({ queryKey: queryKey(tenantId || null, scope, userSearch) });
     }
@@ -187,7 +203,27 @@ export default function AdminConsole() {
   const users = usersQuery.data?.value ?? [];
   const groups = groupsQuery.data?.value ?? [];
   const applications = appsQuery.data?.value ?? [];
+  const permissions = permissionsQuery.data ?? null;
   const busy = mutation.isPending;
+
+  const consentMutation = useMutation({
+    mutationFn: async () => {
+      if (!tenantId) throw new Error("Selecione um tenant.");
+      return apiFetch<{ authUrl: string }>(`/tenants/${tenantId}/provision/oauth/start`, {
+        method: "POST",
+      });
+    },
+    onSuccess: (data) => {
+      window.location.href = data.authUrl;
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Nao foi possivel iniciar o consentimento",
+        description: error instanceof Error ? error.message : "Tente novamente.",
+      });
+    },
+  });
 
   const tenantOptions = useMemo(
     () =>
@@ -401,6 +437,46 @@ export default function AdminConsole() {
                   </p>
                 </div>
                 <StatusBadge tenant={selectedTenant} />
+              </CardContent>
+            </Card>
+          )}
+
+          {permissions && !permissions.ready && (
+            <Card className="border-warning/50 bg-warning/5">
+              <CardContent className="p-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex gap-3">
+                  <AlertTriangle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">Permissoes de escrita ainda nao chegaram no token deste tenant</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Seu usuario pode ser Administrador Global, mas o Admin Console executa pelo App WNR-Audit.
+                      O token atual ainda nao contem estas roles de aplicacao:
+                    </p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {permissions.missingRoles.map((role) => (
+                        <Badge key={role} variant="outline" className="bg-background font-mono text-[11px]">
+                          {role}
+                        </Badge>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Primeiro adicione essas permissoes em Microsoft Graph &gt; Application permissions no App Registration WNR-Audit.
+                      Depois clique em atualizar consentimento e entre como Administrador Global.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  className="gap-2 lg:mt-1"
+                  onClick={() => consentMutation.mutate()}
+                  disabled={consentMutation.isPending}
+                >
+                  {consentMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ExternalLink className="h-4 w-4" />
+                  )}
+                  Atualizar consentimento
+                </Button>
               </CardContent>
             </Card>
           )}

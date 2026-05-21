@@ -10,6 +10,13 @@ const router: IRouter = Router();
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 const MS_AUTH_BASE = "https://login.microsoftonline.com";
+const REQUIRED_ADMIN_CONSOLE_ROLES = [
+  "Directory.ReadWrite.All",
+  "User.ReadWrite.All",
+  "User-PasswordProfile.ReadWrite.All",
+  "Group.ReadWrite.All",
+  "Application.ReadWrite.All",
+];
 
 type GraphMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -25,6 +32,22 @@ function routeParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+function decodeTokenRoles(token: string): string[] {
+  const [, payload] = token.split(".");
+  if (!payload) return [];
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const json = Buffer.from(normalized, "base64").toString("utf8");
+    const parsed = JSON.parse(json) as { roles?: unknown };
+    return Array.isArray(parsed.roles)
+      ? parsed.roles.filter((role): role is string => typeof role === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function graphErrorMessage(status: number, data: unknown): string {
   const graphMessage =
     typeof data === "object" && data
@@ -34,8 +57,8 @@ function graphErrorMessage(status: number, data: unknown): string {
 
   if (status === 403) {
     return graphMessage
-      ? `Microsoft Graph recusou a acao por falta de permissao de escrita consentida para o App WNR-Audit: ${graphMessage}. Refaça o consentimento/reconexao do tenant com um Administrador Global para liberar as permissoes elevadas do Admin Console.`
-      : "Microsoft Graph recusou a acao por falta de permissao de escrita consentida para o App WNR-Audit. Refaça o consentimento/reconexao do tenant com um Administrador Global.";
+      ? `Microsoft Graph recusou a acao porque o token do App WNR-Audit nao contem a permissao de aplicacao exigida: ${graphMessage}. Verifique o painel Permissoes do Admin Console para ver quais roles estao faltando.`
+      : "Microsoft Graph recusou a acao porque o token do App WNR-Audit nao contem a permissao de aplicacao exigida. Verifique o painel Permissoes do Admin Console.";
   }
 
   return graphMessage ?? `Microsoft Graph retornou HTTP ${status}`;
@@ -166,6 +189,39 @@ router.get("/admin-console/tenants", requireAuth, async (req, res): Promise<void
 
   res.json(tenants);
 });
+
+router.get(
+  "/admin-console/tenants/:tenantId/permissions",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const tenant = await getTenantForCustomer(req.customer!.id, routeParam(req.params.tenantId));
+    if (!tenant) {
+      res.status(404).json({ error: "Tenant nao encontrado." });
+      return;
+    }
+
+    if (tenant.status !== "connected") {
+      res.status(400).json({ error: "Tenant nao esta conectado." });
+      return;
+    }
+
+    try {
+      const token = await getTenantAccessToken(tenant);
+      const roles = decodeTokenRoles(token);
+      const missingRoles = REQUIRED_ADMIN_CONSOLE_ROLES.filter((role) => !roles.includes(role));
+
+      res.json({
+        roles,
+        requiredRoles: REQUIRED_ADMIN_CONSOLE_ROLES,
+        missingRoles,
+        ready: missingRoles.length === 0,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: msg });
+    }
+  },
+);
 
 router.get(
   "/admin-console/tenants/:tenantId/users",
