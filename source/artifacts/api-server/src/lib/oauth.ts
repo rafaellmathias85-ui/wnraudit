@@ -10,15 +10,39 @@ export function getOAuthRedirectUri(): string {
 }
 
 export function getWnrAuditOAuthClientId(): string {
-  const id = process.env.MS_OAUTH_CLIENT_ID;
-  if (!id) throw new Error("MS_OAUTH_CLIENT_ID não configurado");
+  const id = process.env.WNR_API_CLIENT_ID ?? process.env.MS_OAUTH_CLIENT_ID;
+  if (!id) throw new Error("WNR_API_CLIENT_ID ou MS_OAUTH_CLIENT_ID não configurado");
   return id;
 }
 
 export function getWnrAuditOAuthClientSecret(): string {
-  const secret = process.env.MS_OAUTH_CLIENT_SECRET;
-  if (!secret) throw new Error("MS_OAUTH_CLIENT_SECRET não configurado");
+  const secret = process.env.WNR_API_CLIENT_SECRET ?? process.env.MS_OAUTH_CLIENT_SECRET;
+  if (!secret) throw new Error("WNR_API_CLIENT_SECRET ou MS_OAUTH_CLIENT_SECRET não configurado");
   return secret;
+}
+
+export function getOAuthClientSecretForClientId(clientId: string | null | undefined): string {
+  if (
+    clientId &&
+    process.env.WNR_API_CLIENT_ID &&
+    clientId === process.env.WNR_API_CLIENT_ID
+  ) {
+    const secret = process.env.WNR_API_CLIENT_SECRET;
+    if (!secret) throw new Error("WNR_API_CLIENT_SECRET não configurado");
+    return secret;
+  }
+
+  if (
+    clientId &&
+    process.env.MS_OAUTH_CLIENT_ID &&
+    clientId === process.env.MS_OAUTH_CLIENT_ID
+  ) {
+    const secret = process.env.MS_OAUTH_CLIENT_SECRET;
+    if (!secret) throw new Error("MS_OAUTH_CLIENT_SECRET não configurado");
+    return secret;
+  }
+
+  return getWnrAuditOAuthClientSecret();
 }
 
 function getHmacKey(): string {

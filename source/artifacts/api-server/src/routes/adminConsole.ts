@@ -4,6 +4,7 @@ import pino from "pino";
 import { db, microsoftTenantsTable } from "@workspace/db";
 import { requireAuth } from "../middlewares/requireAuth";
 import { decryptSecret } from "../lib/msProvisioner";
+import { getOAuthClientSecretForClientId } from "../lib/oauth";
 
 const log = pino({ name: "admin-console" });
 const router: IRouter = Router();
@@ -90,7 +91,7 @@ async function getTenantAccessToken(tenant: {
 
   const clientSecret = tenant.encryptedClientSecret
     ? decryptSecret(tenant.encryptedClientSecret)
-    : process.env.MS_OAUTH_CLIENT_SECRET;
+    : getOAuthClientSecretForClientId(tenant.provisionedAppId);
 
   if (!clientSecret) {
     throw new Error("Segredo OAuth do WNR-Audit nao esta configurado no servidor.");

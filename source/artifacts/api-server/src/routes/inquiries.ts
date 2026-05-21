@@ -10,6 +10,7 @@ import { schemas } from "@workspace/api-zod";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { requireAuth } from "../middlewares/requireAuth";
 import { decryptSecret } from "../lib/msProvisioner";
+import { getOAuthClientSecretForClientId } from "../lib/oauth";
 
 const log = pino({ name: "inquiries" });
 const router: IRouter = Router();
@@ -98,13 +99,7 @@ async function getTenantAccessToken(tenant: {
   if (tenant.encryptedClientSecret) {
     clientSecret = decryptSecret(tenant.encryptedClientSecret);
   } else {
-    const envSecret = process.env.MS_OAUTH_CLIENT_SECRET;
-    if (!envSecret) {
-      throw new Error(
-        "Tenant conectado via OAuth, mas MS_OAUTH_CLIENT_SECRET não está configurado no servidor.",
-      );
-    }
-    clientSecret = envSecret;
+    clientSecret = getOAuthClientSecretForClientId(tenant.provisionedAppId);
   }
 
   const tokenRes = await fetch(
