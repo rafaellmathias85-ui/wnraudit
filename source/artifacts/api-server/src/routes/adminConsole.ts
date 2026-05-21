@@ -148,6 +148,27 @@ async function graphRequest<T>(
   return data as T;
 }
 
+async function tryCreateServicePrincipalForApp(token: string, appId: string): Promise<void> {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      await graphRequest(token, "POST", "/servicePrincipals", { appId });
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("already exists") || message.includes("object references already exist")) {
+        return;
+      }
+
+      if (attempt === 4) {
+        log.warn({ appId, error: message }, "Service principal creation skipped after app creation");
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
+}
+
 async function withTenantToken(
   customerId: string,
   tenantId: string,
@@ -500,7 +521,7 @@ router.post(
         displayName,
         signInAudience: "AzureADMyOrg",
       });
-      await graphRequest(token, "POST", "/servicePrincipals", { appId: app.appId });
+      await tryCreateServicePrincipalForApp(token, app.appId);
       res.status(201).json(app);
     } catch (err) {
       res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
