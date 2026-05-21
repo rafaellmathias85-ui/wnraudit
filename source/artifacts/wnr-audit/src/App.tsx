@@ -44,6 +44,7 @@ import NewExternal from "@/pages/external/new";
 import ExternalDetail from "@/pages/external/detail";
 import ExternalScanDetail from "@/pages/external-scans/detail";
 import SecurityCenter from "@/pages/security-center";
+import AdminConsole from "@/pages/admin-console";
 
 import { AppShell } from "@/components/layout/app-shell";
 
@@ -301,6 +302,12 @@ function Router() {
             <ServerDetail deviceId={params.deviceId as string} />
           </AuthenticatedRoute>
         )}
+      </Route>
+
+      <Route path="/admin-console">
+        <AuthenticatedRoute>
+          <AdminConsole />
+        </AuthenticatedRoute>
       </Route>
 
       <Route path="/server-scans/:scanId">

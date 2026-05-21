@@ -13,6 +13,7 @@ import usersRouter from "./users";
 import externalRouter from "./external";
 import securityCenterRouter from "./securityCenter";
 import reportsRouter from "./reports";
+import adminConsoleRouter from "./adminConsole";
 
 const router: IRouter = Router();
 
@@ -30,5 +31,6 @@ router.use(usersRouter);
 router.use(externalRouter);
 router.use(securityCenterRouter);
 router.use(reportsRouter);
+router.use(adminConsoleRouter);
 
 export default router;

@@ -1,0 +1,514 @@
+import { Router, type IRouter, type Response } from "express";
+import { and, desc, eq } from "drizzle-orm";
+import pino from "pino";
+import { db, microsoftTenantsTable } from "@workspace/db";
+import { requireAuth } from "../middlewares/requireAuth";
+import { decryptSecret } from "../lib/msProvisioner";
+
+const log = pino({ name: "admin-console" });
+const router: IRouter = Router();
+
+const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+const MS_AUTH_BASE = "https://login.microsoftonline.com";
+
+type GraphMethod = "GET" | "POST" | "PATCH" | "DELETE";
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function routeParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function graphErrorMessage(status: number, data: unknown): string {
+  const graphMessage =
+    typeof data === "object" && data
+      ? (((data as Record<string, unknown>).error as Record<string, unknown> | undefined)
+          ?.message as string | undefined)
+      : undefined;
+
+  if (status === 403) {
+    return graphMessage
+      ? `Permissao insuficiente no Microsoft Graph: ${graphMessage}`
+      : "Permissao insuficiente no Microsoft Graph para executar esta acao.";
+  }
+
+  return graphMessage ?? `Microsoft Graph retornou HTTP ${status}`;
+}
+
+async function getTenantForCustomer(customerId: string, tenantId: string) {
+  const [tenant] = await db
+    .select()
+    .from(microsoftTenantsTable)
+    .where(
+      and(
+        eq(microsoftTenantsTable.id, tenantId),
+        eq(microsoftTenantsTable.customerId, customerId),
+      ),
+    )
+    .limit(1);
+
+  return tenant ?? null;
+}
+
+async function getTenantAccessToken(tenant: {
+  microsoftTenantId: string;
+  provisionedAppId: string | null;
+  encryptedClientSecret: string | null;
+}): Promise<string> {
+  if (!tenant.provisionedAppId) {
+    throw new Error("Tenant nao esta conectado com credenciais Microsoft.");
+  }
+
+  const clientSecret = tenant.encryptedClientSecret
+    ? decryptSecret(tenant.encryptedClientSecret)
+    : process.env.MS_OAUTH_CLIENT_SECRET;
+
+  if (!clientSecret) {
+    throw new Error("Segredo OAuth do WNR-Audit nao esta configurado no servidor.");
+  }
+
+  const tokenRes = await fetch(
+    `${MS_AUTH_BASE}/${encodeURIComponent(tenant.microsoftTenantId)}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: tenant.provisionedAppId,
+        client_secret: clientSecret,
+        grant_type: "client_credentials",
+        scope: "https://graph.microsoft.com/.default",
+      }),
+    },
+  );
+
+  const data = (await tokenRes.json()) as Record<string, unknown>;
+  if (!tokenRes.ok) {
+    log.error(
+      { status: tokenRes.status, error: data.error, desc: data.error_description },
+      "Admin console token request failed",
+    );
+    throw new Error("Nao foi possivel autenticar no Microsoft Graph para este tenant.");
+  }
+
+  return data.access_token as string;
+}
+
+async function graphRequest<T>(
+  token: string,
+  method: GraphMethod,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(`${GRAPH_BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+
+  if (res.status === 204) return null as T;
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(graphErrorMessage(res.status, data));
+  }
+
+  return data as T;
+}
+
+async function withTenantToken(
+  customerId: string,
+  tenantId: string,
+  res: Response,
+): Promise<string | null> {
+  const tenant = await getTenantForCustomer(customerId, tenantId);
+  if (!tenant) {
+    res.status(404).json({ error: "Tenant nao encontrado." });
+    return null;
+  }
+
+  if (tenant.status !== "connected") {
+    res.status(400).json({ error: "Tenant nao esta conectado." });
+    return null;
+  }
+
+  try {
+    return await getTenantAccessToken(tenant);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: msg });
+    return null;
+  }
+}
+
+router.get("/admin-console/tenants", requireAuth, async (req, res): Promise<void> => {
+  const customer = req.customer!;
+  const tenants = await db
+    .select({
+      id: microsoftTenantsTable.id,
+      microsoftTenantId: microsoftTenantsTable.microsoftTenantId,
+      displayName: microsoftTenantsTable.displayName,
+      primaryDomain: microsoftTenantsTable.primaryDomain,
+      status: microsoftTenantsTable.status,
+      updatedAt: microsoftTenantsTable.updatedAt,
+    })
+    .from(microsoftTenantsTable)
+    .where(eq(microsoftTenantsTable.customerId, customer.id))
+    .orderBy(desc(microsoftTenantsTable.createdAt));
+
+  res.json(tenants);
+});
+
+router.get(
+  "/admin-console/tenants/:tenantId/users",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    try {
+      const search = asString(req.query.search);
+      const filter = search
+        ? `&$filter=startsWith(displayName,'${search.replace(/'/g, "''")}') or startsWith(userPrincipalName,'${search.replace(/'/g, "''")}')`
+        : "";
+      const data = await graphRequest(token, "GET", `/users?$top=50${filter}&$select=id,displayName,userPrincipalName,mail,accountEnabled,jobTitle,department`);
+      res.json(data);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.post(
+  "/admin-console/tenants/:tenantId/users",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const displayName = asString(req.body.displayName);
+    const userPrincipalName = asString(req.body.userPrincipalName);
+    const mailNickname = asString(req.body.mailNickname);
+    const password = asString(req.body.password);
+
+    if (!displayName || !userPrincipalName || !mailNickname || !password) {
+      res.status(400).json({ error: "Nome, UPN, mail nickname e senha temporaria sao obrigatorios." });
+      return;
+    }
+
+    try {
+      const data = await graphRequest(token, "POST", "/users", {
+        accountEnabled: true,
+        displayName,
+        userPrincipalName,
+        mailNickname,
+        passwordProfile: {
+          forceChangePasswordNextSignIn: true,
+          password,
+        },
+      });
+      res.status(201).json(data);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.patch(
+  "/admin-console/tenants/:tenantId/users/:userId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const body: Record<string, unknown> = {};
+    for (const key of ["displayName", "jobTitle", "department"] as const) {
+      const value = asString(req.body[key]);
+      if (value) body[key] = value;
+    }
+    const accountEnabled = asBoolean(req.body.accountEnabled);
+    if (accountEnabled !== null) body.accountEnabled = accountEnabled;
+
+    if (asString(req.body.password)) {
+      body.passwordProfile = {
+        forceChangePasswordNextSignIn: true,
+        password: asString(req.body.password),
+      };
+    }
+
+    if (Object.keys(body).length === 0) {
+      res.status(400).json({ error: "Nenhum campo para atualizar." });
+      return;
+    }
+
+    try {
+      await graphRequest(
+        token,
+        "PATCH",
+        `/users/${encodeURIComponent(routeParam(req.params.userId))}`,
+        body,
+      );
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.delete(
+  "/admin-console/tenants/:tenantId/users/:userId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    try {
+      await graphRequest(token, "DELETE", `/users/${encodeURIComponent(routeParam(req.params.userId))}`);
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.get(
+  "/admin-console/tenants/:tenantId/groups",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    try {
+      const data = await graphRequest(token, "GET", "/groups?$top=50&$select=id,displayName,mail,mailEnabled,securityEnabled,description");
+      res.json(data);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.post(
+  "/admin-console/tenants/:tenantId/groups",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const displayName = asString(req.body.displayName);
+    const mailNickname = asString(req.body.mailNickname);
+    if (!displayName || !mailNickname) {
+      res.status(400).json({ error: "Nome e mail nickname sao obrigatorios." });
+      return;
+    }
+
+    try {
+      const data = await graphRequest(token, "POST", "/groups", {
+        displayName,
+        mailNickname,
+        mailEnabled: false,
+        securityEnabled: true,
+        description: asString(req.body.description),
+      });
+      res.status(201).json(data);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.patch(
+  "/admin-console/tenants/:tenantId/groups/:groupId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const body: Record<string, unknown> = {};
+    const displayName = asString(req.body.displayName);
+    const description = asString(req.body.description);
+    if (displayName) body.displayName = displayName;
+    if (description) body.description = description;
+
+    if (Object.keys(body).length === 0) {
+      res.status(400).json({ error: "Nenhum campo para atualizar." });
+      return;
+    }
+
+    try {
+      await graphRequest(token, "PATCH", `/groups/${encodeURIComponent(routeParam(req.params.groupId))}`, body);
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.post(
+  "/admin-console/tenants/:tenantId/groups/:groupId/members",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const userId = asString(req.body.userId);
+    if (!userId) {
+      res.status(400).json({ error: "Informe o UPN ou ID do usuario." });
+      return;
+    }
+
+    try {
+      const user = await graphRequest<{ id: string }>(token, "GET", `/users/${encodeURIComponent(userId)}?$select=id`);
+      await graphRequest(token, "POST", `/groups/${encodeURIComponent(routeParam(req.params.groupId))}/members/$ref`, {
+        "@odata.id": `${GRAPH_BASE}/directoryObjects/${user.id}`,
+      });
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.delete(
+  "/admin-console/tenants/:tenantId/groups/:groupId/members/:userId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    try {
+      const user = await graphRequest<{ id: string }>(token, "GET", `/users/${encodeURIComponent(routeParam(req.params.userId))}?$select=id`);
+      await graphRequest(token, "DELETE", `/groups/${encodeURIComponent(routeParam(req.params.groupId))}/members/${user.id}/$ref`);
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.delete(
+  "/admin-console/tenants/:tenantId/groups/:groupId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    try {
+      await graphRequest(token, "DELETE", `/groups/${encodeURIComponent(routeParam(req.params.groupId))}`);
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.get(
+  "/admin-console/tenants/:tenantId/applications",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    try {
+      const data = await graphRequest(token, "GET", "/applications?$top=50&$select=id,appId,displayName,signInAudience,createdDateTime");
+      res.json(data);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.post(
+  "/admin-console/tenants/:tenantId/applications",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const displayName = asString(req.body.displayName);
+    if (!displayName) {
+      res.status(400).json({ error: "Nome do aplicativo e obrigatorio." });
+      return;
+    }
+
+    try {
+      const app = await graphRequest<{ id: string; appId: string }>(token, "POST", "/applications", {
+        displayName,
+        signInAudience: "AzureADMyOrg",
+      });
+      await graphRequest(token, "POST", "/servicePrincipals", { appId: app.appId });
+      res.status(201).json(app);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.patch(
+  "/admin-console/tenants/:tenantId/applications/:applicationId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const displayName = asString(req.body.displayName);
+    if (!displayName) {
+      res.status(400).json({ error: "Novo nome e obrigatorio." });
+      return;
+    }
+
+    try {
+      await graphRequest(token, "PATCH", `/applications/${encodeURIComponent(routeParam(req.params.applicationId))}`, { displayName });
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.post(
+  "/admin-console/tenants/:tenantId/applications/:applicationId/passwords",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const displayName = asString(req.body.displayName) ?? "WNR-Audit Admin Console";
+    try {
+      const secret = await graphRequest(token, "POST", `/applications/${encodeURIComponent(routeParam(req.params.applicationId))}/addPassword`, {
+        passwordCredential: {
+          displayName,
+          endDateTime: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+      });
+      res.status(201).json(secret);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.delete(
+  "/admin-console/tenants/:tenantId/applications/:applicationId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    try {
+      await graphRequest(token, "DELETE", `/applications/${encodeURIComponent(routeParam(req.params.applicationId))}`);
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+export default router;
