@@ -34,8 +34,8 @@ function graphErrorMessage(status: number, data: unknown): string {
 
   if (status === 403) {
     return graphMessage
-      ? `Permissao insuficiente no Microsoft Graph: ${graphMessage}`
-      : "Permissao insuficiente no Microsoft Graph para executar esta acao.";
+      ? `Microsoft Graph recusou a acao por falta de permissao de escrita consentida para o App WNR-Audit: ${graphMessage}. Refaça o consentimento/reconexao do tenant com um Administrador Global para liberar as permissoes elevadas do Admin Console.`
+      : "Microsoft Graph recusou a acao por falta de permissao de escrita consentida para o App WNR-Audit. Refaça o consentimento/reconexao do tenant com um Administrador Global.";
   }
 
   return graphMessage ?? `Microsoft Graph retornou HTTP ${status}`;

@@ -14,15 +14,23 @@ const ROPC_SCOPES = [
   "https://graph.microsoft.com/AppRoleAssignment.ReadWrite.All",
   "https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All",
   "https://graph.microsoft.com/Directory.Read.All",
+  "https://graph.microsoft.com/Directory.ReadWrite.All",
+  "https://graph.microsoft.com/User.ReadWrite.All",
+  "https://graph.microsoft.com/Group.ReadWrite.All",
+  "https://graph.microsoft.com/User-PasswordProfile.ReadWrite.All",
   "https://graph.microsoft.com/Organization.Read.All",
   "offline_access",
 ].join(" ");
 
 const BOOTSTRAP_SCOPES = ROPC_SCOPES;
 
-const REQUIRED_APP_ROLES: Array<{ id: string; value: string; description: string }> = [
+const REQUIRED_APP_ROLES: Array<{ id?: string; value: string; description: string }> = [
   { id: "7ab1d382-f21e-4acd-a863-ba3e13f7da61", value: "Directory.Read.All", description: "Entra ID — usuarios, grupos, funcoes" },
+  { value: "Directory.ReadWrite.All", description: "Entra ID — administracao completa do diretorio" },
   { id: "df021288-bdef-4463-88db-98f22de89214", value: "User.Read.All", description: "Leitura de usuarios" },
+  { value: "User.ReadWrite.All", description: "Criacao, edicao, bloqueio e exclusao de usuarios" },
+  { value: "User-PasswordProfile.ReadWrite.All", description: "Redefinicao de senha de usuarios" },
+  { value: "Group.ReadWrite.All", description: "Criacao, edicao e exclusao de grupos" },
   { id: "498476ce-e0fe-48b0-b801-37ba7ef9dc52", value: "Organization.Read.All", description: "Informacoes da organizacao" },
   { id: "bf394140-e372-4bf9-a898-299cfc7564e5", value: "SecurityEvents.Read.All", description: "Defender — eventos de seguranca" },
   { id: "246dd0d5-5bd0-4def-940b-0421030a5b68", value: "Policy.Read.All", description: "Politicas de acesso condicional e MFA" },
@@ -257,11 +265,19 @@ export async function provisionTenantApp(
     roleMap[role.value] = role.id;
   }
 
+  const resolveRoleId = (role: { id?: string; value: string }): string => {
+    const roleId = roleMap[role.value] ?? role.id;
+    if (!roleId) {
+      throw new Error(`Permissao Microsoft Graph nao encontrada: ${role.value}`);
+    }
+    return roleId;
+  };
+
   const requiredResourceAccess = [
     {
       resourceAppId: MICROSOFT_GRAPH_APP_ID,
       resourceAccess: REQUIRED_APP_ROLES.map((r) => ({
-        id: roleMap[r.value] ?? r.id,
+        id: resolveRoleId(r),
         type: "Role",
       })),
     },
@@ -289,7 +305,7 @@ export async function provisionTenantApp(
 
   const results = await Promise.allSettled(
     REQUIRED_APP_ROLES.map(async (role) => {
-      const roleId = roleMap[role.value] ?? role.id;
+      const roleId = resolveRoleId(role);
       await graphRequest(
         accessToken,
         "POST",
