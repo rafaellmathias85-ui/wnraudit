@@ -17,6 +17,8 @@ const REQUIRED_ADMIN_CONSOLE_ROLES = [
   "User-PasswordProfile.ReadWrite.All",
   "Group.ReadWrite.All",
   "Application.ReadWrite.All",
+  "Sites.Read.All",
+  "Files.Read.All",
 ];
 
 type GraphMethod = "GET" | "POST" | "PATCH" | "DELETE";
@@ -583,6 +585,121 @@ router.delete(
     try {
       await graphRequest(token, "DELETE", `/applications/${encodeURIComponent(routeParam(req.params.applicationId))}`);
       res.sendStatus(204);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.get(
+  "/admin-console/tenants/:tenantId/files/search",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const query = asString(req.query.q);
+    if (!query) {
+      res.json({ value: [] });
+      return;
+    }
+
+    try {
+      const data = await graphRequest<{
+        value?: Array<{
+          hitsContainers?: Array<{
+            hits?: Array<{
+              hitId?: string;
+              resource?: {
+                id?: string;
+                name?: string;
+                webUrl?: string;
+                size?: number;
+                lastModifiedDateTime?: string;
+                file?: { mimeType?: string };
+                folder?: Record<string, unknown>;
+                parentReference?: {
+                  driveId?: string;
+                  siteId?: string;
+                  path?: string;
+                  sharepointIds?: {
+                    siteId?: string;
+                    webId?: string;
+                    listId?: string;
+                    listItemUniqueId?: string;
+                  };
+                };
+              };
+            }>;
+          }>;
+        }>;
+      }>(token, "POST", "/search/query", {
+        requests: [
+          {
+            entityTypes: ["driveItem"],
+            query: { queryString: query },
+            from: 0,
+            size: 50,
+            fields: [
+              "id",
+              "name",
+              "webUrl",
+              "size",
+              "lastModifiedDateTime",
+              "file",
+              "folder",
+              "parentReference",
+            ],
+          },
+        ],
+      });
+
+      const hits = data.value?.flatMap((result) =>
+        result.hitsContainers?.flatMap((container) => container.hits ?? []) ?? [],
+      ) ?? [];
+
+      const value = hits
+        .map((hit) => hit.resource)
+        .filter((resource): resource is NonNullable<typeof resource> => Boolean(resource?.id && resource?.name))
+        .map((resource) => ({
+          id: resource.id,
+          name: resource.name,
+          webUrl: resource.webUrl ?? null,
+          size: resource.size ?? null,
+          lastModifiedDateTime: resource.lastModifiedDateTime ?? null,
+          mimeType: resource.file?.mimeType ?? null,
+          isFolder: Boolean(resource.folder),
+          driveId: resource.parentReference?.driveId ?? null,
+          siteId: resource.parentReference?.siteId ?? resource.parentReference?.sharepointIds?.siteId ?? null,
+          path: resource.parentReference?.path ?? null,
+        }));
+
+      res.json({ value });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.post(
+  "/admin-console/tenants/:tenantId/files/preview",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const driveId = asString(req.body.driveId);
+    const itemId = asString(req.body.itemId);
+    if (!driveId || !itemId) {
+      res.status(400).json({ error: "driveId e itemId sao obrigatorios." });
+      return;
+    }
+
+    try {
+      const preview = await graphRequest(token, "POST", `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/preview`, {
+        viewer: "onedrive",
+      });
+      res.json(preview);
     } catch (err) {
       res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
     }

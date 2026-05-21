@@ -19,6 +19,7 @@ const ROPC_SCOPES = [
   "https://graph.microsoft.com/Group.ReadWrite.All",
   "https://graph.microsoft.com/User-PasswordProfile.ReadWrite.All",
   "https://graph.microsoft.com/Organization.Read.All",
+  "https://graph.microsoft.com/Files.Read.All",
   "offline_access",
 ].join(" ");
 
@@ -40,6 +41,7 @@ const REQUIRED_APP_ROLES: Array<{ id?: string; value: string; description: strin
   { id: "2f51be20-0bb4-4fed-bf7b-db946066c75e", value: "DeviceManagementManagedDevices.Read.All", description: "Intune — dispositivos gerenciados" },
   { id: "dc377aa6-52d8-4e23-dc5f-bb0fe9f7b6a7", value: "DeviceManagementRBAC.Read.All", description: "Intune — RBAC" },
   { id: "332a536c-c7ef-4017-ab91-336970924f0d", value: "Sites.Read.All", description: "SharePoint — sites e documentos" },
+  { value: "Files.Read.All", description: "SharePoint e Teams — leitura de arquivos" },
   { id: "2280dda6-0bfd-44ee-a2f4-cb867cfc4c1e", value: "Team.ReadBasic.All", description: "Teams — equipes" },
   { id: "59a6b24b-4225-4393-8165-ebaec5d55d7a", value: "Channel.ReadBasic.All", description: "Teams — canais" },
   { id: "693c5e45-0940-467d-9b8a-1022fb9d42ef", value: "Mail.ReadBasic.All", description: "Exchange — metadados de email" },

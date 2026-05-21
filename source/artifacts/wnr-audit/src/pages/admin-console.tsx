@@ -5,7 +5,11 @@ import {
   AppWindow,
   Ban,
   CheckCircle2,
+  Eye,
   ExternalLink,
+  FileSearch,
+  FileText,
+  FolderOpen,
   KeyRound,
   Loader2,
   Plus,
@@ -79,6 +83,25 @@ type PermissionStatus = {
   ready: boolean;
 };
 
+type TenantFile = {
+  id: string;
+  name: string;
+  webUrl: string | null;
+  size: number | null;
+  lastModifiedDateTime: string | null;
+  mimeType: string | null;
+  isFolder: boolean;
+  driveId: string | null;
+  siteId: string | null;
+  path: string | null;
+};
+
+type FilePreview = {
+  getUrl?: string;
+  postUrl?: string;
+  postParameters?: string;
+};
+
 type AdminEntity = "user" | "group" | "application";
 type DialogMode = "create" | "edit" | "password" | "member";
 
@@ -120,6 +143,7 @@ export default function AdminConsole() {
   const queryClient = useQueryClient();
   const [tenantId, setTenantId] = useState<string>("");
   const [userSearch, setUserSearch] = useState("");
+  const [fileSearch, setFileSearch] = useState("");
   const [activeTab, setActiveTab] = useState("users");
   const [dialog, setDialog] = useState<{
     entity: AdminEntity;
@@ -127,6 +151,10 @@ export default function AdminConsole() {
     item?: DirectoryUser | DirectoryGroup | DirectoryApplication;
   } | null>(null);
   const [secretText, setSecretText] = useState<string | null>(null);
+  const [filePreview, setFilePreview] = useState<{
+    file: TenantFile;
+    preview: FilePreview | null;
+  } | null>(null);
 
   const tenantsQuery = useQuery({
     queryKey: ["admin-console", "tenants"],
@@ -171,12 +199,31 @@ export default function AdminConsole() {
     queryFn: () => apiFetch<PermissionStatus>(`/admin-console/tenants/${tenantId}/permissions`),
   });
 
+  const filesQuery = useQuery({
+    queryKey: queryKey(tenantId || null, "files", fileSearch.trim()),
+    enabled: Boolean(tenantId) && activeTab === "files" && fileSearch.trim().length >= 2,
+    queryFn: () =>
+      apiFetch<GraphList<TenantFile>>(
+        `/admin-console/tenants/${tenantId}/files/search?q=${encodeURIComponent(fileSearch.trim())}`,
+      ),
+  });
+
   const refreshActive = () => {
-    const scope = activeTab === "users" ? "users" : activeTab === "groups" ? "groups" : "applications";
+    const scope =
+      activeTab === "users"
+        ? "users"
+        : activeTab === "groups"
+          ? "groups"
+          : activeTab === "applications"
+            ? "applications"
+            : "files";
     queryClient.invalidateQueries({ queryKey: queryKey(tenantId || null, scope) });
     queryClient.invalidateQueries({ queryKey: queryKey(tenantId || null, "permissions") });
     if (scope === "users") {
       queryClient.invalidateQueries({ queryKey: queryKey(tenantId || null, scope, userSearch) });
+    }
+    if (scope === "files") {
+      queryClient.invalidateQueries({ queryKey: queryKey(tenantId || null, scope, fileSearch.trim()) });
     }
   };
 
@@ -203,8 +250,28 @@ export default function AdminConsole() {
   const users = usersQuery.data?.value ?? [];
   const groups = groupsQuery.data?.value ?? [];
   const applications = appsQuery.data?.value ?? [];
+  const files = filesQuery.data?.value ?? [];
   const permissions = permissionsQuery.data ?? null;
   const busy = mutation.isPending;
+
+  const previewMutation = useMutation({
+    mutationFn: async (file: TenantFile) => {
+      if (!tenantId) throw new Error("Selecione um tenant.");
+      if (!file.driveId) throw new Error("Este item nao tem driveId para preview.");
+      const preview = await apiFetch<FilePreview>(`/admin-console/tenants/${tenantId}/files/preview`, {
+        method: "POST",
+        body: JSON.stringify({ driveId: file.driveId, itemId: file.id }),
+      });
+      return { file, preview };
+    },
+    onSuccess: (result) => setFilePreview(result),
+    onError: (error) =>
+      toast({
+        variant: "destructive",
+        title: "Falha ao abrir preview",
+        description: error instanceof Error ? error.message : "Nao foi possivel abrir o arquivo.",
+      }),
+  });
 
   const consentMutation = useMutation({
     mutationFn: async () => {
@@ -495,6 +562,10 @@ export default function AdminConsole() {
                 <AppWindow className="h-4 w-4" />
                 Aplicativos
               </TabsTrigger>
+              <TabsTrigger value="files" className="gap-2">
+                <FileSearch className="h-4 w-4" />
+                Arquivos
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="users">
@@ -699,6 +770,118 @@ export default function AdminConsole() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            <TabsContent value="files">
+              <Card>
+                <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <CardTitle>Arquivos do tenant</CardTitle>
+                    <CardDescription>
+                      Busque arquivos em Teams, grupos Microsoft 365 e bibliotecas SharePoint.
+                    </CardDescription>
+                  </div>
+                  <div className="relative w-full md:w-[360px]">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      className="pl-9"
+                      placeholder="Buscar por nome, extensão ou conteúdo"
+                      value={fileSearch}
+                      onChange={(event) => setFileSearch(event.target.value)}
+                    />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {fileSearch.trim().length < 2 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <FileSearch className="h-10 w-10 text-muted-foreground opacity-40" />
+                      <p className="font-medium mt-3">Digite pelo menos 2 caracteres para buscar.</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        A busca consulta arquivos acessíveis via Microsoft Graph no tenant selecionado.
+                      </p>
+                    </div>
+                  ) : filesQuery.isLoading ? (
+                    <Skeleton className="h-48 w-full" />
+                  ) : files.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <FileText className="h-10 w-10 text-muted-foreground opacity-40" />
+                      <p className="font-medium mt-3">Nenhum arquivo encontrado.</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Verifique o termo de busca ou as permissões Sites.Read.All e Files.Read.All.
+                      </p>
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Arquivo</TableHead>
+                          <TableHead>Tipo</TableHead>
+                          <TableHead>Origem</TableHead>
+                          <TableHead>Modificado</TableHead>
+                          <TableHead className="text-right">Ações</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {files.map((file) => (
+                          <TableRow key={`${file.driveId}-${file.id}`}>
+                            <TableCell>
+                              <div className="flex items-start gap-3">
+                                {file.isFolder ? (
+                                  <FolderOpen className="h-4 w-4 text-muted-foreground mt-1" />
+                                ) : (
+                                  <FileText className="h-4 w-4 text-muted-foreground mt-1" />
+                                )}
+                                <div>
+                                  <div className="font-medium">{file.name}</div>
+                                  <div className="text-xs text-muted-foreground max-w-[460px] truncate">
+                                    {file.path || file.webUrl || file.id}
+                                  </div>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">
+                                {file.isFolder ? "Pasta" : file.mimeType?.split("/").pop() || "Arquivo"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground">
+                              {file.driveId ? file.driveId.slice(0, 8) : "-"}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {file.lastModifiedDateTime
+                                ? new Date(file.lastModifiedDateTime).toLocaleString("pt-BR")
+                                : "-"}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex justify-end gap-1">
+                                {!file.isFolder && file.driveId && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => previewMutation.mutate(file)}
+                                    disabled={previewMutation.isPending}
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                )}
+                                {file.webUrl && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => window.open(file.webUrl!, "_blank", "noopener,noreferrer")}
+                                  >
+                                    <ExternalLink className="h-4 w-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
           </Tabs>
         </>
       )}
@@ -714,6 +897,47 @@ export default function AdminConsole() {
           <Input readOnly value={secretText ?? ""} className="font-mono" />
           <DialogFooter>
             <Button onClick={() => setSecretText(null)}>Fechar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!filePreview} onOpenChange={(open) => !open && setFilePreview(null)}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>{filePreview?.file.name}</DialogTitle>
+            <DialogDescription>
+              Preview seguro gerado pelo Microsoft Graph para o tenant selecionado.
+            </DialogDescription>
+          </DialogHeader>
+          {filePreview?.preview?.getUrl ? (
+            <iframe
+              title={filePreview.file.name}
+              src={filePreview.preview.getUrl}
+              className="h-[70vh] w-full rounded-md border bg-background"
+            />
+          ) : (
+            <div className="rounded-md border p-8 text-center">
+              <p className="font-medium">Preview indisponível para este arquivo.</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Abra o arquivo diretamente no Microsoft 365.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            {filePreview?.file.webUrl && (
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2"
+                onClick={() => window.open(filePreview.file.webUrl!, "_blank", "noopener,noreferrer")}
+              >
+                <ExternalLink className="h-4 w-4" />
+                Abrir no Microsoft 365
+              </Button>
+            )}
+            <Button type="button" onClick={() => setFilePreview(null)}>
+              Fechar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

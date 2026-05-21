@@ -25,6 +25,7 @@ $RequiredRoleValues = @(
   "DeviceManagementManagedDevices.Read.All",
   "DeviceManagementRBAC.Read.All",
   "Sites.Read.All",
+  "Files.Read.All",
   "Team.ReadBasic.All",
   "Channel.ReadBasic.All",
   "Mail.ReadBasic.All",
