@@ -701,6 +701,60 @@ router.get(
 );
 
 router.get(
+  "/admin-console/tenants/:tenantId/files/browse",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const driveId = asString(req.query.driveId as string);
+    const itemId = asString(req.query.itemId as string);
+    if (!driveId || !itemId) {
+      res.status(400).json({ error: "driveId e itemId sao obrigatorios." });
+      return;
+    }
+
+    type DriveItem = {
+      id?: string;
+      name?: string;
+      webUrl?: string;
+      size?: number;
+      lastModifiedDateTime?: string;
+      file?: { mimeType?: string };
+      folder?: Record<string, unknown>;
+      parentReference?: { driveId?: string; siteId?: string; path?: string };
+    };
+
+    try {
+      const data = await graphRequest<{ value?: DriveItem[] }>(
+        token,
+        "GET",
+        `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/children?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference&$orderby=name&$top=200`,
+      );
+
+      const value = (data.value ?? [])
+        .filter((item): item is DriveItem & { id: string; name: string } => Boolean(item.id && item.name))
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          webUrl: item.webUrl ?? null,
+          size: item.size ?? null,
+          lastModifiedDateTime: item.lastModifiedDateTime ?? null,
+          mimeType: item.file?.mimeType ?? null,
+          isFolder: !item.file,
+          driveId: item.parentReference?.driveId ?? driveId,
+          siteId: item.parentReference?.siteId ?? null,
+          path: item.parentReference?.path ?? null,
+        }));
+
+      res.json({ value });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+router.get(
   "/admin-console/tenants/:tenantId/files/download",
   requireAuth,
   async (req, res): Promise<void> => {

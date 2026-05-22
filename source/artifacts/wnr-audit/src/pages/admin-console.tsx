@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -145,6 +145,7 @@ export default function AdminConsole() {
   const [tenantId, setTenantId] = useState<string>("");
   const [userSearch, setUserSearch] = useState("");
   const [fileSearch, setFileSearch] = useState("");
+  const [folderStack, setFolderStack] = useState<Array<{ id: string; driveId: string; name: string }>>([]);
   const [activeTab, setActiveTab] = useState("users");
   const [dialog, setDialog] = useState<{
     entity: AdminEntity;
@@ -171,6 +172,10 @@ export default function AdminConsole() {
       setTenantId(connectedTenants[0].id);
     }
   }, [connectedTenants, tenantId]);
+
+  useEffect(() => {
+    setFolderStack([]);
+  }, [tenantId]);
 
   const usersQuery = useQuery({
     queryKey: queryKey(tenantId || null, "users", userSearch),
@@ -206,6 +211,16 @@ export default function AdminConsole() {
     queryFn: () =>
       apiFetch<GraphList<TenantFile>>(
         `/admin-console/tenants/${tenantId}/files/search?q=${encodeURIComponent(fileSearch.trim())}`,
+      ),
+  });
+
+  const currentFolder = folderStack[folderStack.length - 1] ?? null;
+  const browseQuery = useQuery({
+    queryKey: queryKey(tenantId || null, "files-browse", currentFolder?.id ?? ""),
+    enabled: Boolean(tenantId) && activeTab === "files" && Boolean(currentFolder),
+    queryFn: () =>
+      apiFetch<GraphList<TenantFile>>(
+        `/admin-console/tenants/${tenantId}/files/browse?driveId=${encodeURIComponent(currentFolder!.driveId)}&itemId=${encodeURIComponent(currentFolder!.id)}`,
       ),
   });
 
@@ -251,7 +266,9 @@ export default function AdminConsole() {
   const users = usersQuery.data?.value ?? [];
   const groups = groupsQuery.data?.value ?? [];
   const applications = appsQuery.data?.value ?? [];
-  const files = filesQuery.data?.value ?? [];
+  const isInFolder = folderStack.length > 0;
+  const activeFilesQuery = isInFolder ? browseQuery : filesQuery;
+  const files = activeFilesQuery.data?.value ?? [];
   const permissions = permissionsQuery.data ?? null;
   const busy = mutation.isPending;
 
@@ -807,12 +824,41 @@ export default function AdminConsole() {
                       className="pl-9"
                       placeholder="Buscar por nome, extensão ou conteúdo"
                       value={fileSearch}
-                      onChange={(event) => setFileSearch(event.target.value)}
+                      onChange={(event) => {
+                        setFileSearch(event.target.value);
+                        if (folderStack.length > 0) setFolderStack([]);
+                      }}
                     />
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {fileSearch.trim().length < 2 ? (
+                  {isInFolder && (
+                    <div className="flex items-center gap-1 flex-wrap mb-4 text-sm">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 gap-1 text-muted-foreground"
+                        onClick={() => setFolderStack([])}
+                      >
+                        <Search className="h-3 w-3" />
+                        Busca
+                      </Button>
+                      {folderStack.map((folder, i) => (
+                        <Fragment key={folder.id}>
+                          <span className="text-muted-foreground">/</span>
+                          <Button
+                            size="sm"
+                            variant={i === folderStack.length - 1 ? "secondary" : "ghost"}
+                            className="h-7"
+                            onClick={() => setFolderStack((prev) => prev.slice(0, i + 1))}
+                          >
+                            {folder.name}
+                          </Button>
+                        </Fragment>
+                      ))}
+                    </div>
+                  )}
+                  {!isInFolder && fileSearch.trim().length < 2 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <FileSearch className="h-10 w-10 text-muted-foreground opacity-40" />
                       <p className="font-medium mt-3">Digite pelo menos 2 caracteres para buscar.</p>
@@ -820,15 +866,15 @@ export default function AdminConsole() {
                         A busca consulta arquivos acessíveis via Microsoft Graph no tenant selecionado.
                       </p>
                     </div>
-                  ) : filesQuery.isLoading ? (
+                  ) : activeFilesQuery.isLoading ? (
                     <Skeleton className="h-48 w-full" />
-                  ) : filesQuery.isError ? (
+                  ) : activeFilesQuery.isError ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <AlertTriangle className="h-10 w-10 text-destructive opacity-80" />
                       <p className="font-medium mt-3">Erro ao buscar arquivos.</p>
                       <p className="text-sm text-muted-foreground mt-1 max-w-lg">
-                        {filesQuery.error instanceof Error
-                          ? filesQuery.error.message
+                        {activeFilesQuery.error instanceof Error
+                          ? activeFilesQuery.error.message
                           : "Tente novamente ou verifique as permissões do tenant."}
                       </p>
                     </div>
@@ -884,36 +930,54 @@ export default function AdminConsole() {
                               </TableCell>
                               <TableCell>
                                 <div className="flex justify-end gap-1">
-                                  {!file.isFolder && file.driveId && (
+                                  {file.isFolder && file.driveId ? (
                                     <Button
                                       size="sm"
                                       variant="ghost"
-                                      title="Visualizar"
-                                      onClick={() => previewMutation.mutate(file)}
-                                      disabled={previewMutation.isPending}
+                                      title="Abrir pasta"
+                                      onClick={() =>
+                                        setFolderStack((prev) => [
+                                          ...prev,
+                                          { id: file.id, driveId: file.driveId!, name: file.name },
+                                        ])
+                                      }
                                     >
-                                      <Eye className="h-4 w-4" />
+                                      <FolderOpen className="h-4 w-4" />
                                     </Button>
+                                  ) : (
+                                    <>
+                                      {file.driveId && (
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Visualizar"
+                                          onClick={() => previewMutation.mutate(file)}
+                                          disabled={previewMutation.isPending}
+                                        >
+                                          <Eye className="h-4 w-4" />
+                                        </Button>
+                                      )}
+                                      {file.driveId && (
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Baixar"
+                                          onClick={() => downloadMutation.mutate(file)}
+                                          disabled={downloadMutation.isPending}
+                                        >
+                                          <Download className="h-4 w-4" />
+                                        </Button>
+                                      )}
+                                    </>
                                   )}
                                   {file.webUrl && (
                                     <Button
                                       size="sm"
                                       variant="ghost"
-                                      title="Abrir/Editar no Microsoft 365"
+                                      title="Abrir no Microsoft 365"
                                       onClick={() => window.open(file.webUrl!, "_blank", "noopener,noreferrer")}
                                     >
                                       <ExternalLink className="h-4 w-4" />
-                                    </Button>
-                                  )}
-                                  {!file.isFolder && file.driveId && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      title="Baixar"
-                                      onClick={() => downloadMutation.mutate(file)}
-                                      disabled={downloadMutation.isPending}
-                                    >
-                                      <Download className="h-4 w-4" />
                                     </Button>
                                   )}
                                 </div>
