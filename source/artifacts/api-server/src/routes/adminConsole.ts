@@ -685,9 +685,12 @@ router.get(
           size: item.size ?? null,
           lastModifiedDateTime: item.lastModifiedDateTime ?? null,
           mimeType: item.file?.mimeType ?? null,
-          // The Search API may omit the `folder` facet for folders, but files always
-          // have the `file` facet. Detect folders by absence of the file facet.
-          isFolder: !item.file,
+          // The Search API returns a `file` facet for OneNote notebooks, SitePages
+          // libraries and other special items that are not real downloadable files.
+          // Real files always have an extension (a dot in the name).
+          // Items without a dot are treated as folders/navigable items regardless
+          // of whether the Search API returned a file facet.
+          isFolder: !item.file || !item.name.includes("."),
           driveId: item.parentReference?.driveId ?? null,
           siteId: item.parentReference?.siteId ?? null,
           path: item.parentReference?.path ?? null,
