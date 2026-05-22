@@ -628,17 +628,43 @@ router.get(
       const rootSite = await graphRequest<{ id?: string }>(token, "GET", "/sites/root?$select=id").catch(() => null);
       if (rootSite?.id && !siteIds.includes(rootSite.id)) siteIds.unshift(rootSite.id);
 
-      // Search each site's drive in parallel (skip sites without drives)
       const encoded = encodeURIComponent(query);
+      let firstError: string | null = null;
+
+      // For each site, enumerate ALL drives (document libraries) then search each one.
+      // Using the default drive only misses files in secondary SharePoint libraries.
       const perSite = await Promise.allSettled(
-        siteIds.map((siteId) =>
-          graphRequest<{ value?: DriveItem[] }>(
+        siteIds.map(async (siteId) => {
+          const drivesData = await graphRequest<{ value?: Array<{ id?: string }> }>(
             token,
             "GET",
-            `/sites/${siteId}/drive/root/search(q='${encoded}')` +
-              `?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference&$top=50`,
-          ).then((d) => d.value ?? []),
-        ),
+            `/sites/${siteId}/drives?$select=id`,
+          ).catch((e: unknown) => {
+            if (!firstError) firstError = e instanceof Error ? e.message : String(e);
+            return null;
+          });
+
+          const driveIds = (drivesData?.value ?? []).map((d) => d.id).filter(Boolean) as string[];
+          if (driveIds.length === 0) return [] as DriveItem[];
+
+          const driveSearches = await Promise.allSettled(
+            driveIds.map((driveId) =>
+              graphRequest<{ value?: DriveItem[] }>(
+                token,
+                "GET",
+                `/drives/${driveId}/root/search(q='${encoded}')?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference&$top=50`,
+              ).then((d) => d.value ?? []),
+            ),
+          );
+
+          for (const r of driveSearches) {
+            if (r.status === "rejected" && !firstError) {
+              firstError = r.reason instanceof Error ? r.reason.message : String(r.reason);
+            }
+          }
+
+          return driveSearches.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+        }),
       );
 
       const seen = new Set<string>();
@@ -662,6 +688,12 @@ router.get(
           siteId: item.parentReference?.siteId ?? null,
           path: item.parentReference?.path ?? null,
         }));
+
+      // Surface the first permission/API error if the search returned nothing
+      if (value.length === 0 && firstError) {
+        res.status(502).json({ error: firstError });
+        return;
+      }
 
       res.json({ value });
     } catch (err) {
