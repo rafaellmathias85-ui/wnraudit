@@ -619,26 +619,10 @@ router.get(
       const encoded = encodeURIComponent(query);
       let firstError: string | null = null;
 
-      // Collect drives from three independent sources in parallel.
-      // /sites?search=* is unreliable in app-only context (can return 0 sites);
-      // enumeration via M365 Groups is the authoritative source for Teams/SharePoint sites.
-      const [rootSiteResult, groupsResult, searchSitesResult] = await Promise.allSettled([
-        graphRequest<{ id?: string }>(token, "GET", "/sites/root?$select=id"),
-        graphRequest<{ value?: Array<{ id: string }> }>(
-          token,
-          "GET",
-          "/groups?$filter=groupTypes/any(c:c%20eq%20'Unified')&$select=id&$top=200",
-        ),
-        graphRequest<{ value?: Array<{ id?: string }> }>(
-          token,
-          "GET",
-          "/sites?search=*&$select=id&$top=100",
-        ),
-      ]);
-
+      // Collect drives from all SharePoint sites, including communication sites
+      // (which are NOT linked to M365 Groups and are invisible to /sites?search=* in app-only context).
       const driveIdSet = new Set<string>();
 
-      // Helper: enumerate and collect all drive IDs from a list of site IDs
       const addDrivesFromSites = async (siteIds: string[]) => {
         const results = await Promise.allSettled(
           siteIds.map((siteId) =>
@@ -661,38 +645,66 @@ router.get(
         }
       };
 
-      // Source 1: Root site drives
-      const rootSiteId = rootSiteResult.status === "fulfilled" ? rootSiteResult.value.id : null;
-      if (rootSiteId) await addDrivesFromSites([rootSiteId]);
+      // Primary: getAllSites returns every site collection regardless of type —
+      // team sites, communication sites, hub sites, classic sites.
+      // This is the only reliable way to reach communication sites in app-only context.
+      const allSitesResult = await graphRequest<{ value?: Array<{ id?: string }> }>(
+        token,
+        "GET",
+        "/sites/getAllSites?$select=id&$top=500",
+      ).catch(() => null);
 
-      // Source 2: Drives from each M365 Group (Teams sites, SharePoint team sites)
-      const groups = groupsResult.status === "fulfilled" ? (groupsResult.value.value ?? []) : [];
-      if (groups.length > 0) {
-        const groupDriveResults = await Promise.allSettled(
-          groups.map((g) =>
-            graphRequest<{ value?: Array<{ id?: string }> }>(
-              token,
-              "GET",
-              `/groups/${g.id}/drives?$select=id`,
-            ).catch(() => null),
+      const allSiteIds = (allSitesResult?.value ?? []).map((s) => s.id).filter(Boolean) as string[];
+
+      if (allSiteIds.length > 0) {
+        await addDrivesFromSites(allSiteIds);
+      } else {
+        // Fallback when getAllSites is unavailable: root + search=* + M365 Group drives
+        const [rootSiteResult, groupsResult, searchSitesResult] = await Promise.allSettled([
+          graphRequest<{ id?: string }>(token, "GET", "/sites/root?$select=id"),
+          graphRequest<{ value?: Array<{ id: string }> }>(
+            token,
+            "GET",
+            "/groups?$filter=groupTypes/any(c:c%20eq%20'Unified')&$select=id&$top=200",
           ),
-        );
-        for (const r of groupDriveResults) {
-          if (r.status === "fulfilled" && r.value?.value) {
-            for (const d of r.value.value) {
-              if (d.id) driveIdSet.add(d.id);
+          graphRequest<{ value?: Array<{ id?: string }> }>(
+            token,
+            "GET",
+            "/sites?search=*&$select=id&$top=100",
+          ),
+        ]);
+
+        const fallbackSiteIds = new Set<string>();
+        if (rootSiteResult.status === "fulfilled" && rootSiteResult.value.id) {
+          fallbackSiteIds.add(rootSiteResult.value.id);
+        }
+        if (searchSitesResult.status === "fulfilled") {
+          for (const s of searchSitesResult.value.value ?? []) {
+            if (s.id) fallbackSiteIds.add(s.id);
+          }
+        }
+        if (fallbackSiteIds.size > 0) await addDrivesFromSites(Array.from(fallbackSiteIds));
+
+        const groups = groupsResult.status === "fulfilled" ? (groupsResult.value.value ?? []) : [];
+        if (groups.length > 0) {
+          const groupDriveResults = await Promise.allSettled(
+            groups.map((g) =>
+              graphRequest<{ value?: Array<{ id?: string }> }>(
+                token,
+                "GET",
+                `/groups/${g.id}/drives?$select=id`,
+              ).catch(() => null),
+            ),
+          );
+          for (const r of groupDriveResults) {
+            if (r.status === "fulfilled" && r.value?.value) {
+              for (const d of r.value.value) {
+                if (d.id) driveIdSet.add(d.id);
+              }
             }
           }
         }
       }
-
-      // Source 3: Sites from search=* (supplementary; may overlap with above)
-      const searchSiteIds = (
-        searchSitesResult.status === "fulfilled" ? (searchSitesResult.value.value ?? []) : []
-      )
-        .map((s) => s.id)
-        .filter((id): id is string => Boolean(id) && id !== rootSiteId);
-      if (searchSiteIds.length > 0) await addDrivesFromSites(searchSiteIds);
 
       const driveIds = Array.from(driveIdSet);
 
