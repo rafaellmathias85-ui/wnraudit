@@ -278,8 +278,10 @@ export default function AdminConsole() {
     mutationFn: async (file: TenantFile) => {
       if (!tenantId) throw new Error("Selecione um tenant.");
       if (!file.driveId) throw new Error("Este item nao tem driveId para download.");
+      const params = new URLSearchParams({ driveId: file.driveId, itemId: file.id });
+      if (file.webUrl) params.set("webUrl", file.webUrl);
       const result = await apiFetch<{ downloadUrl: string }>(
-        `/admin-console/tenants/${tenantId}/files/download?driveId=${encodeURIComponent(file.driveId)}&itemId=${encodeURIComponent(file.id)}`,
+        `/admin-console/tenants/${tenantId}/files/download?${params}`,
       );
       return result.downloadUrl;
     },

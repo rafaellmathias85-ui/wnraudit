@@ -685,7 +685,9 @@ router.get(
           size: item.size ?? null,
           lastModifiedDateTime: item.lastModifiedDateTime ?? null,
           mimeType: item.file?.mimeType ?? null,
-          isFolder: Boolean(item.folder),
+          // The Search API may omit the `folder` facet for folders, but files always
+          // have the `file` facet. Detect folders by absence of the file facet.
+          isFolder: !item.file,
           driveId: item.parentReference?.driveId ?? null,
           siteId: item.parentReference?.siteId ?? null,
           path: item.parentReference?.path ?? null,
@@ -707,14 +709,38 @@ router.get(
 
     const driveId = asString(req.query.driveId as string);
     const itemId = asString(req.query.itemId as string);
+    const webUrlFallback = asString(req.query.webUrl as string);
+
     if (!driveId || !itemId) {
       res.status(400).json({ error: "driveId e itemId sao obrigatorios." });
       return;
     }
 
+    // Helper to fall back to the SharePoint webUrl when direct Graph download is unavailable.
+    // The webUrl works via the user's own browser session even when app-only access is blocked.
+    const fallback = () => {
+      if (webUrlFallback) {
+        res.json({ downloadUrl: webUrlFallback });
+        return true;
+      }
+      return false;
+    };
+
     try {
-      // Graph /content redirects to a pre-authenticated download URL (Location header).
-      // We return that URL to the client so it can open it directly in the browser.
+      // Attempt 1: GET item metadata — @microsoft.graph.downloadUrl is a pre-authenticated
+      // CDN URL (not SharePoint REST), so it is not affected by DisableCustomAppAuthentication.
+      const item = await graphRequest<Record<string, unknown>>(
+        token,
+        "GET",
+        `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}`,
+      );
+      const cdnUrl = item["@microsoft.graph.downloadUrl"] as string | undefined;
+      if (cdnUrl) {
+        res.json({ downloadUrl: cdnUrl });
+        return;
+      }
+
+      // Attempt 2: /content redirect (may be blocked by DisableCustomAppAuthentication).
       const contentRes = await fetch(
         `${GRAPH_BASE}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/content`,
         {
@@ -723,16 +749,19 @@ router.get(
           redirect: "manual",
         },
       );
-
       const location = contentRes.headers.get("location");
-      if (!location) {
-        res.status(502).json({ error: "URL de download nao disponivel para este arquivo." });
+      if (location) {
+        res.json({ downloadUrl: location });
         return;
       }
 
-      res.json({ downloadUrl: location });
+      if (!fallback()) {
+        res.status(502).json({ error: "URL de download nao disponivel para este arquivo." });
+      }
     } catch (err) {
-      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      if (!fallback()) {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
     }
   },
 );
