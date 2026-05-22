@@ -616,59 +616,105 @@ router.get(
     };
 
     try {
-      // Enumerate all SharePoint sites (includes root site + classic sites ignored by /search/query)
-      const sitesData = await graphRequest<{ value?: Array<{ id?: string }> }>(
-        token,
-        "GET",
-        "/sites?search=*&$select=id&$top=100",
-      );
-      const siteIds = (sitesData.value ?? []).map((s) => s.id).filter(Boolean) as string[];
-
-      // Also always include the root site ("/") in case it wasn't returned by search=*
-      const rootSite = await graphRequest<{ id?: string }>(token, "GET", "/sites/root?$select=id").catch(() => null);
-      if (rootSite?.id && !siteIds.includes(rootSite.id)) siteIds.unshift(rootSite.id);
-
       const encoded = encodeURIComponent(query);
       let firstError: string | null = null;
 
-      // For each site, enumerate ALL drives (document libraries) then search each one.
-      // Using the default drive only misses files in secondary SharePoint libraries.
-      const perSite = await Promise.allSettled(
-        siteIds.map(async (siteId) => {
-          const drivesData = await graphRequest<{ value?: Array<{ id?: string }> }>(
-            token,
-            "GET",
-            `/sites/${siteId}/drives?$select=id`,
-          ).catch((e: unknown) => {
-            if (!firstError) firstError = e instanceof Error ? e.message : String(e);
-            return null;
-          });
+      // Collect drives from three independent sources in parallel.
+      // /sites?search=* is unreliable in app-only context (can return 0 sites);
+      // enumeration via M365 Groups is the authoritative source for Teams/SharePoint sites.
+      const [rootSiteResult, groupsResult, searchSitesResult] = await Promise.allSettled([
+        graphRequest<{ id?: string }>(token, "GET", "/sites/root?$select=id"),
+        graphRequest<{ value?: Array<{ id: string }> }>(
+          token,
+          "GET",
+          "/groups?$filter=groupTypes/any(c:c%20eq%20'Unified')&$select=id&$top=200",
+        ),
+        graphRequest<{ value?: Array<{ id?: string }> }>(
+          token,
+          "GET",
+          "/sites?search=*&$select=id&$top=100",
+        ),
+      ]);
 
-          const driveIds = (drivesData?.value ?? []).map((d) => d.id).filter(Boolean) as string[];
-          if (driveIds.length === 0) return [] as DriveItem[];
+      const driveIdSet = new Set<string>();
 
-          const driveSearches = await Promise.allSettled(
-            driveIds.map((driveId) =>
-              graphRequest<{ value?: DriveItem[] }>(
-                token,
-                "GET",
-                `/drives/${driveId}/root/search(q='${encoded}')?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference&$top=50`,
-              ).then((d) => d.value ?? []),
-            ),
-          );
-
-          for (const r of driveSearches) {
-            if (r.status === "rejected" && !firstError) {
-              firstError = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      // Helper: enumerate and collect all drive IDs from a list of site IDs
+      const addDrivesFromSites = async (siteIds: string[]) => {
+        const results = await Promise.allSettled(
+          siteIds.map((siteId) =>
+            graphRequest<{ value?: Array<{ id?: string }> }>(
+              token,
+              "GET",
+              `/sites/${siteId}/drives?$select=id`,
+            ).catch((e: unknown) => {
+              if (!firstError) firstError = e instanceof Error ? e.message : String(e);
+              return null;
+            }),
+          ),
+        );
+        for (const r of results) {
+          if (r.status === "fulfilled" && r.value?.value) {
+            for (const d of r.value.value) {
+              if (d.id) driveIdSet.add(d.id);
             }
           }
+        }
+      };
 
-          return driveSearches.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-        }),
+      // Source 1: Root site drives
+      const rootSiteId = rootSiteResult.status === "fulfilled" ? rootSiteResult.value.id : null;
+      if (rootSiteId) await addDrivesFromSites([rootSiteId]);
+
+      // Source 2: Drives from each M365 Group (Teams sites, SharePoint team sites)
+      const groups = groupsResult.status === "fulfilled" ? (groupsResult.value.value ?? []) : [];
+      if (groups.length > 0) {
+        const groupDriveResults = await Promise.allSettled(
+          groups.map((g) =>
+            graphRequest<{ value?: Array<{ id?: string }> }>(
+              token,
+              "GET",
+              `/groups/${g.id}/drives?$select=id`,
+            ).catch(() => null),
+          ),
+        );
+        for (const r of groupDriveResults) {
+          if (r.status === "fulfilled" && r.value?.value) {
+            for (const d of r.value.value) {
+              if (d.id) driveIdSet.add(d.id);
+            }
+          }
+        }
+      }
+
+      // Source 3: Sites from search=* (supplementary; may overlap with above)
+      const searchSiteIds = (
+        searchSitesResult.status === "fulfilled" ? (searchSitesResult.value.value ?? []) : []
+      )
+        .map((s) => s.id)
+        .filter((id): id is string => Boolean(id) && id !== rootSiteId);
+      if (searchSiteIds.length > 0) await addDrivesFromSites(searchSiteIds);
+
+      const driveIds = Array.from(driveIdSet);
+
+      // Search all collected drives in parallel
+      const driveSearchResults = await Promise.allSettled(
+        driveIds.map((driveId) =>
+          graphRequest<{ value?: DriveItem[] }>(
+            token,
+            "GET",
+            `/drives/${driveId}/root/search(q='${encoded}')?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference&$top=50`,
+          ).then((d) => d.value ?? []),
+        ),
       );
 
+      for (const r of driveSearchResults) {
+        if (r.status === "rejected" && !firstError) {
+          firstError = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        }
+      }
+
       const seen = new Set<string>();
-      const value = perSite
+      const value = driveSearchResults
         .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
         .filter((item): item is DriveItem & { id: string; name: string } => {
           if (!item.id || !item.name) return false;
@@ -689,7 +735,6 @@ router.get(
           path: item.parentReference?.path ?? null,
         }));
 
-      // Surface the first permission/API error if the search returned nothing
       if (value.length === 0 && firstError) {
         res.status(502).json({ error: firstError });
         return;
