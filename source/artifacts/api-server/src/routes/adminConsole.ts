@@ -627,16 +627,32 @@ router.get(
         }>;
       };
 
-      const result = await graphRequest<SearchResponse>(token, "POST", "/search/query", {
-        requests: [
-          {
-            entityTypes: ["driveItem"],
-            query: { queryString: query },
-            from: 0,
-            size: 50,
-          },
-        ],
-      });
+      // The Search API requires a `region` for app-only (client_credentials) tokens.
+      // We don't know the tenant's datacenter region ahead of time, so try in order:
+      // NAM (Americas) → EUR (Europe) → APC (Asia-Pacific).
+      let result: SearchResponse | null = null;
+      for (const region of ["NAM", "EUR", "APC"] as const) {
+        try {
+          result = await graphRequest<SearchResponse>(token, "POST", "/search/query", {
+            requests: [
+              {
+                entityTypes: ["driveItem"],
+                query: { queryString: query },
+                from: 0,
+                size: 50,
+                region,
+              },
+            ],
+          });
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // If the error is NOT region-related, propagate immediately.
+          if (!msg.toLowerCase().includes("region")) throw err;
+          // If we exhausted all regions, throw the last error.
+          if (region === "APC") throw err;
+        }
+      }
 
       const hits = result?.value?.[0]?.hitsContainers?.[0]?.hits ?? [];
       const seen = new Set<string>();
