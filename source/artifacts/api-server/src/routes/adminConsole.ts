@@ -708,6 +708,15 @@ router.get(
 
       const driveIds = Array.from(driveIdSet);
 
+      if (driveIds.length === 0) {
+        res.status(502).json({
+          error:
+            firstError ??
+            "Nenhum drive SharePoint acessível encontrado. Verifique se as permissões Sites.Read.All e Files.Read.All foram concedidas neste tenant (clique em Atualizar consentimento).",
+        });
+        return;
+      }
+
       // Search all collected drives in parallel
       const driveSearchResults = await Promise.allSettled(
         driveIds.map((driveId) =>

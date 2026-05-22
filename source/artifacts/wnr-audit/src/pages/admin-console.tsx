@@ -801,6 +801,16 @@ export default function AdminConsole() {
                     </div>
                   ) : filesQuery.isLoading ? (
                     <Skeleton className="h-48 w-full" />
+                  ) : filesQuery.isError ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <AlertTriangle className="h-10 w-10 text-destructive opacity-80" />
+                      <p className="font-medium mt-3">Erro ao buscar arquivos.</p>
+                      <p className="text-sm text-muted-foreground mt-1 max-w-lg">
+                        {filesQuery.error instanceof Error
+                          ? filesQuery.error.message
+                          : "Tente novamente ou verifique as permissões do tenant."}
+                      </p>
+                    </div>
                   ) : files.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <FileText className="h-10 w-10 text-muted-foreground opacity-40" />
