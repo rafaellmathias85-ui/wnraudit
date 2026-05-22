@@ -383,6 +383,200 @@ function isIp(host: string): boolean {
   return net.isIP(host) > 0;
 }
 
+const DKIM_COMMON_SELECTORS = [
+  "default",
+  "google",
+  "mail",
+  "email",
+  "k1",
+  "k2",
+  "s1",
+  "s2",
+  "dkim",
+  "proofpoint",
+  "selector1",
+  "selector2",
+  "smtp",
+  "mta",
+];
+
+async function dkimCheck(host: string): Promise<Check | null> {
+  for (const selector of DKIM_COMMON_SELECTORS) {
+    try {
+      const records = await dns
+        .resolveTxt(`${selector}._domainkey.${host}`)
+        .catch(() => [] as string[][]);
+      const flat = records.map((r) => r.join(""));
+      if (flat.some((r) => /v=DKIM1/i.test(r))) {
+        return null;
+      }
+    } catch {
+      // selector not found
+    }
+  }
+  return {
+    controlId: "EXT.DNS.DKIM",
+    title: "Registro DKIM não encontrado em seletores comuns",
+    category: "DNS / E-mail",
+    severity: "medium",
+    status: "open",
+    affectedResource: `*._domainkey.${host}`,
+    description:
+      "Nenhum registro DKIM foi encontrado nos seletores mais comuns. Sem DKIM, e-mails enviados pelo domínio não possuem assinatura criptográfica.",
+    rationale:
+      "DKIM permite que servidores receptores verifiquem que o e-mail foi realmente enviado pelo domínio e não foi adulterado em trânsito. É exigido para políticas DMARC eficazes.",
+    remediation:
+      "1. Configure DKIM no seu servidor de e-mail (Google Workspace, Microsoft 365 ou Postfix).\n2. Publique o registro TXT no formato: [seletor]._domainkey.{domínio} com o valor v=DKIM1; k=rsa; p=...\n3. Valide a publicação com ferramenta como MXToolbox DKIM Lookup.",
+    references: ["RFC 6376", "https://mxtoolbox.com/dkim.aspx"],
+    evidence: { selectorsChecked: DKIM_COMMON_SELECTORS },
+  };
+}
+
+async function mtaStsCheck(host: string): Promise<Check[]> {
+  const findings: Check[] = [];
+  try {
+    const mtaStsRecords = await dns
+      .resolveTxt(`_mta-sts.${host}`)
+      .catch(() => [] as string[][]);
+    const hasMtaSts = mtaStsRecords.map((r) => r.join("")).some((r) => /v=STSv1/i.test(r));
+    if (!hasMtaSts) {
+      findings.push({
+        controlId: "EXT.DNS.MTASTS",
+        title: "MTA-STS não configurado",
+        category: "DNS / E-mail",
+        severity: "low",
+        status: "open",
+        affectedResource: `_mta-sts.${host}`,
+        description:
+          "MTA-STS (Mail Transfer Agent Strict Transport Security) não está publicado. Sem ele, e-mails recebidos podem ser entregues sem criptografia TLS.",
+        rationale:
+          "MTA-STS instrui servidores de envio a entregar e-mails apenas via TLS, prevenindo ataques de downgrade durante a entrega SMTP.",
+        remediation:
+          "1. Crie um arquivo de política em https://mta-sts.{dominio}/.well-known/mta-sts.txt\n2. Publique o registro TXT _mta-sts.{dominio} com v=STSv1; id=...\n3. Verifique com MXToolbox MTA-STS Checker.",
+        references: ["RFC 8461"],
+        evidence: {},
+      });
+    }
+  } catch {
+    // not resolvable = not configured
+    findings.push({
+      controlId: "EXT.DNS.MTASTS",
+      title: "MTA-STS não configurado",
+      category: "DNS / E-mail",
+      severity: "low",
+      status: "open",
+      affectedResource: `_mta-sts.${host}`,
+      description: "MTA-STS não está publicado para o domínio.",
+      rationale:
+        "MTA-STS instrui servidores de envio a entregar e-mails apenas via TLS, prevenindo ataques de downgrade.",
+      remediation:
+        "Configure MTA-STS publicando um registro TXT em _mta-sts.{dominio} e hospedando a política em https://mta-sts.{dominio}/.well-known/mta-sts.txt",
+      references: ["RFC 8461"],
+      evidence: {},
+    });
+  }
+  return findings;
+}
+
+const EXPOSED_PATHS = [
+  { path: "/.env", title: "Arquivo .env exposto", severity: "critical" as Severity },
+  { path: "/.git/HEAD", title: "Repositório .git exposto", severity: "critical" as Severity },
+  { path: "/wp-admin/", title: "Painel WordPress exposto", severity: "high" as Severity },
+  { path: "/wp-login.php", title: "Login WordPress exposto", severity: "high" as Severity },
+  { path: "/admin/", title: "Painel /admin exposto", severity: "high" as Severity },
+  { path: "/phpinfo.php", title: "phpinfo() exposto", severity: "high" as Severity },
+  { path: "/.htpasswd", title: "Arquivo .htpasswd exposto", severity: "critical" as Severity },
+  { path: "/config.php", title: "config.php exposto", severity: "high" as Severity },
+  { path: "/backup.zip", title: "Backup .zip exposto na raiz", severity: "high" as Severity },
+  { path: "/db.sql", title: "Dump de banco exposto", severity: "critical" as Severity },
+  { path: "/server-status", title: "Apache server-status exposto", severity: "medium" as Severity },
+  { path: "/actuator/health", title: "Spring Actuator exposto", severity: "medium" as Severity },
+  { path: "/.DS_Store", title: "Artefato macOS .DS_Store exposto", severity: "low" as Severity },
+];
+
+async function exposedPathsCheck(
+  host: string,
+  port: number,
+  isHttps: boolean,
+): Promise<Check[]> {
+  const findings: Check[] = [];
+  const proto = isHttps ? "https" : "http";
+  for (const ep of EXPOSED_PATHS) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      const url = `${proto}://${host}:${port}${ep.path}`;
+      const res = await fetch(url, {
+        method: "GET",
+        redirect: "manual",
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      if (res.status === 200) {
+        findings.push({
+          controlId: `EXT.WEB.EXPOSED.${ep.path.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}`,
+          title: ep.title,
+          category: "Exposição de Arquivos Sensíveis",
+          severity: ep.severity,
+          status: "open",
+          affectedResource: `${proto}://${host}:${port}${ep.path}`,
+          description: `O recurso ${ep.path} retornou HTTP 200 e está publicamente acessível. Isso indica exposição de conteúdo sensível.`,
+          rationale:
+            "Arquivos de configuração, backups e repositórios expostos permitem que atacantes obtenham credenciais, chaves de API e estrutura interna da aplicação.",
+          remediation:
+            `1. Bloqueie o acesso ao caminho ${ep.path} via configuração do servidor web (nginx/Apache).\n2. Verifique se arquivos sensíveis existem no diretório web público e remova-os.\n3. Configure o servidor para negar requests a esse padrão com retorno 403 ou 404.`,
+          references: ["OWASP Top 10 — A01: Broken Access Control"],
+          evidence: { url, statusCode: res.status },
+        });
+      }
+    } catch {
+      // connection error or timeout = not exposed
+    }
+  }
+  return findings;
+}
+
+async function corsCheck(
+  host: string,
+  port: number,
+  isHttps: boolean,
+): Promise<Check[]> {
+  const findings: Check[] = [];
+  try {
+    const proto = isHttps ? "https" : "http";
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${proto}://${host}:${port}/`, {
+      method: "GET",
+      headers: { Origin: "https://evil.example.com" },
+      redirect: "manual",
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    const acao = res.headers.get("access-control-allow-origin");
+    if (acao === "*" || acao === "https://evil.example.com") {
+      findings.push({
+        controlId: `EXT.WEB.CORS.${port}`,
+        title: "CORS permissivo: todas origens permitidas",
+        category: "Configuração de Segurança",
+        severity: acao === "*" ? "high" : "medium",
+        status: "open",
+        affectedResource: `${proto}://${host}:${port}/`,
+        description: `O servidor retornou Access-Control-Allow-Origin: ${acao}. Isso permite que qualquer site faça requisições autenticadas a esta API.`,
+        rationale:
+          "CORS excessivamente permissivo permite ataques de Cross-Site Request Forgery via origens maliciosas que conseguem ler respostas da API.",
+        remediation:
+          "1. Defina uma allowlist de origens legítimas em vez de usar *.\n2. Em Express: use cors({ origin: ['https://app.seudominio.com'] }).\n3. Nunca reflita a origem da requisição sem validação contra a allowlist.",
+        references: ["OWASP CORS", "https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS"],
+        evidence: { acao, testedOrigin: "https://evil.example.com" },
+      });
+    }
+  } catch {
+    // not accessible
+  }
+  return findings;
+}
+
 async function dnsChecks(host: string): Promise<Check[]> {
   const findings: Check[] = [];
   if (isIp(host)) return findings;
@@ -403,8 +597,8 @@ async function dnsChecks(host: string): Promise<Check[]> {
         rationale:
           "SPF é uma das três pernas do DMARC. Sem ele, o domínio é facilmente usado em campanhas de phishing contra clientes e parceiros.",
         remediation:
-          "Crie um registro TXT no DNS com algo como: v=spf1 include:_spf.google.com -all (ajuste para o seu provedor de e-mail real). Termine com -all para política rígida.",
-        references: ["RFC 7208"],
+          "1. Identifique todos os servidores que enviam e-mail pelo seu domínio.\n2. Crie um registro TXT: v=spf1 include:_spf.google.com -all (ajuste para o seu provedor).\n3. Termine com -all (reject) ou ~all (softfail). Evite +all.\n4. Valide com MXToolbox SPF Checker.",
+        references: ["RFC 7208", "https://mxtoolbox.com/spf.aspx"],
         evidence: { txtRecords: flat },
       });
     }
@@ -426,8 +620,8 @@ async function dnsChecks(host: string): Promise<Check[]> {
         rationale:
           "DMARC instrui provedores receptores (Gmail, Outlook) a rejeitar ou colocar em quarentena e-mails que falharem em SPF/DKIM. Sem DMARC, ataques de spoofing chegam à caixa de entrada.",
         remediation:
-          "Crie um registro TXT em _dmarc.{dominio} com pelo menos: v=DMARC1; p=quarantine; rua=mailto:postmaster@{dominio}. Após monitorar, evolua para p=reject.",
-        references: ["RFC 7489"],
+          "1. Crie um registro TXT em _dmarc.{dominio}.\n2. Valor mínimo: v=DMARC1; p=quarantine; rua=mailto:dmarc@{dominio}\n3. Monitore os relatórios por 2-4 semanas.\n4. Após validar que o tráfego legítimo está alinhado, evolua para p=reject.",
+        references: ["RFC 7489", "https://mxtoolbox.com/dmarc.aspx"],
         evidence: { dmarcRecords: dmarcFlat },
       });
     } else {
@@ -448,12 +642,20 @@ async function dnsChecks(host: string): Promise<Check[]> {
           rationale:
             "Política 'none' não bloqueia spoofing — apenas gera relatórios. Atacantes continuam capazes de falsificar o domínio.",
           remediation:
-            "Após validar nos relatórios DMARC que o tráfego legítimo está alinhado, mude p=none para p=quarantine e depois p=reject.",
+            "1. Verifique os relatórios DMARC (rua) para identificar fontes legítimas que ainda não estão alinhadas.\n2. Corrija SPF e DKIM para essas fontes.\n3. Mude p=none para p=quarantine.\n4. Após 30 dias de observação sem falsos positivos, mude para p=reject.",
           references: ["RFC 7489"],
           evidence: { dmarcRecords: dmarcFlat },
         });
       }
     }
+
+    // DKIM check
+    const dkimFinding = await dkimCheck(host);
+    if (dkimFinding) findings.push(dkimFinding);
+
+    // MTA-STS check
+    const mtaFindings = await mtaStsCheck(host);
+    findings.push(...mtaFindings);
   } catch (err) {
     logger.warn({ err, host }, "DNS checks failed");
   }
@@ -721,6 +923,15 @@ async function runScanForHost(host: string): Promise<ExternalScanResult> {
   await Promise.all(workers);
 
   findings.push(...(await dnsChecks(host)));
+
+  // Web-specific checks on HTTP ports (exposed paths + CORS)
+  const [httpsExp, httpsCorsFin, httpExp, httpCorsFin] = await Promise.all([
+    exposedPathsCheck(host, 443, true),
+    corsCheck(host, 443, true),
+    exposedPathsCheck(host, 80, false),
+    corsCheck(host, 80, false),
+  ]);
+  findings.push(...httpsExp, ...httpsCorsFin, ...httpExp, ...httpCorsFin);
 
   let critical = 0,
     high = 0,

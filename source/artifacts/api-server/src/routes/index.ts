@@ -14,6 +14,9 @@ import externalRouter from "./external";
 import securityCenterRouter from "./securityCenter";
 import reportsRouter from "./reports";
 import adminConsoleRouter from "./adminConsole";
+import phishingRouter from "./phishing";
+import awarenessRouter from "./awareness";
+import remediationChatRouter from "./remediationChat";
 
 const router: IRouter = Router();
 
@@ -32,5 +35,8 @@ router.use(externalRouter);
 router.use(securityCenterRouter);
 router.use(reportsRouter);
 router.use(adminConsoleRouter);
+router.use(phishingRouter);
+router.use(awarenessRouter);
+router.use(remediationChatRouter);
 
 export default router;

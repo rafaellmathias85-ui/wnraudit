@@ -1,5 +1,7 @@
 import express, { type Express } from "express";
 import cors from "cors";
+import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
 import pinoHttp from "pino-http";
 import { clerkMiddleware } from "@clerk/express";
 import router from "./routes";
@@ -31,6 +33,35 @@ app.use(
   }),
 );
 
+// Security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // frontend served separately
+    crossOriginEmbedderPolicy: false,
+  }),
+);
+
+// Global rate limiting: 300 req/min por IP
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: { error: "Muitas requisições. Tente novamente em um minuto." },
+  }),
+);
+
+// Strict rate limiting for auth-adjacent endpoints
+const strictLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Limite de tentativas atingido. Tente novamente em 15 minutos." },
+});
+app.use("/api/phishing/track", strictLimiter);
+
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
 const allowedOrigin =
@@ -38,8 +69,8 @@ const allowedOrigin =
     ? process.env.FRONTEND_BASE_URL?.replace(/\/$/, "") || false
     : true;
 app.use(cors({ credentials: true, origin: allowedOrigin }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 app.use(clerkMiddleware());
 

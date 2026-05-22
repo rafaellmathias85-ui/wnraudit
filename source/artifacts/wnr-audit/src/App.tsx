@@ -45,6 +45,13 @@ import ExternalDetail from "@/pages/external/detail";
 import ExternalScanDetail from "@/pages/external-scans/detail";
 import SecurityCenter from "@/pages/security-center";
 import AdminConsole from "@/pages/admin-console";
+import PhishingCampaigns from "@/pages/phishing/campaigns";
+import CampaignDetail from "@/pages/phishing/campaign-detail";
+import PhishingTemplates from "@/pages/phishing/templates";
+import PhishingEmployees from "@/pages/phishing/employees";
+import PhishingTraining from "@/pages/phishing/training";
+import AwarenessModulesList from "@/pages/awareness/list";
+import AwarenessModuleDetail from "@/pages/awareness/module-detail";
 
 import { AppShell } from "@/components/layout/app-shell";
 
@@ -350,6 +357,51 @@ function Router() {
         <AuthenticatedRoute requireSuperAdmin>
           <UsersList />
         </AuthenticatedRoute>
+      </Route>
+
+      <Route path="/phishing">
+        <AuthenticatedRoute>
+          <PhishingCampaigns />
+        </AuthenticatedRoute>
+      </Route>
+
+      <Route path="/phishing/campaigns/:campaignId">
+        {(params) => (
+          <AuthenticatedRoute>
+            <CampaignDetail campaignId={params.campaignId as string} />
+          </AuthenticatedRoute>
+        )}
+      </Route>
+
+      <Route path="/phishing/templates">
+        <AuthenticatedRoute>
+          <PhishingTemplates />
+        </AuthenticatedRoute>
+      </Route>
+
+      <Route path="/phishing/employees">
+        <AuthenticatedRoute>
+          <PhishingEmployees />
+        </AuthenticatedRoute>
+      </Route>
+
+      {/* Training page: public (no auth required) */}
+      <Route path="/phishing/training/:token">
+        {(params) => <PhishingTraining token={params.token as string} />}
+      </Route>
+
+      <Route path="/awareness">
+        <AuthenticatedRoute>
+          <AwarenessModulesList />
+        </AuthenticatedRoute>
+      </Route>
+
+      <Route path="/awareness/:moduleId">
+        {(params) => (
+          <AuthenticatedRoute>
+            <AwarenessModuleDetail moduleId={params.moduleId as string} />
+          </AuthenticatedRoute>
+        )}
       </Route>
 
       <Route component={NotFound} />

@@ -5,3 +5,5 @@ export * from "./findings";
 export * from "./devices";
 export * from "./externalAssets";
 export * from "./tenantInquiries";
+export * from "./phishing";
+export * from "./awareness";

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { 
-  useGetFinding, 
+import {
+  useGetFinding,
   useUpdateFindingStatus,
   getGetFindingQueryKey
 } from "@workspace/api-client-react";
@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ArrowLeft, Clock, ShieldAlert, Server, CheckCircle, Info, FileJson, Link as LinkIcon, Edit, Navigation, ExternalLink, Copy, Check } from "lucide-react";
+import { ArrowLeft, Clock, ShieldAlert, Server, CheckCircle, Info, FileJson, Link as LinkIcon, Edit, Navigation, ExternalLink, Copy, Check, Bot, Send, Loader2 } from "lucide-react";
 import { SeverityBadge } from "@/components/ui/severity-badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { FindingStatus } from "@workspace/api-client-react";
@@ -21,11 +21,160 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
+type ChatMessage = { role: "user" | "assistant"; content: string };
+
+function RemediationChat({ findingId }: { findingId: string }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || isLoading) return;
+    const newMessages: ChatMessage[] = [...messages, { role: "user", content: text }];
+    setMessages(newMessages);
+    setInput("");
+    setIsLoading(true);
+    try {
+      const res = await fetch(`/api/findings/${findingId}/remediation-chat`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: newMessages }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setMessages((m) => [...m, { role: "assistant", content: data.message }]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "assistant", content: `Erro ao consultar IA: ${e instanceof Error ? e.message : String(e)}` }]);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function renderMarkdown(text: string) {
+    const lines = text.split("\n");
+    const elements: React.ReactNode[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.startsWith("# ")) elements.push(<h3 key={i} className="font-bold text-sm mt-3 mb-1">{line.slice(2)}</h3>);
+      else if (line.startsWith("## ")) elements.push(<h4 key={i} className="font-semibold text-sm mt-2 mb-1 text-primary">{line.slice(3)}</h4>);
+      else if (line.startsWith("### ")) elements.push(<h5 key={i} className="font-medium text-sm mt-2 mb-0.5">{line.slice(4)}</h5>);
+      else if (line.startsWith("```")) elements.push(null);
+      else if (line.startsWith("- ")) elements.push(<li key={i} className="ml-3 list-disc text-xs leading-relaxed">{renderInline(line.slice(2))}</li>);
+      else if (/^\d+\.\s/.test(line)) elements.push(<li key={i} className="ml-3 list-decimal text-xs leading-relaxed">{renderInline(line.replace(/^\d+\.\s/, ""))}</li>);
+      else if (line.startsWith("> ")) elements.push(<blockquote key={i} className="border-l-2 border-primary pl-2 my-1 text-xs italic text-muted-foreground">{line.slice(2)}</blockquote>);
+      else if (line.trim() === "") elements.push(<div key={i} className="h-1.5" />);
+      else elements.push(<p key={i} className="text-xs leading-relaxed">{renderInline(line)}</p>);
+    }
+    return <div className="space-y-0.5">{elements.filter(Boolean)}</div>;
+  }
+
+  function renderInline(text: string): React.ReactNode {
+    const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith("`") && part.endsWith("`")) return <code key={i} className="bg-muted px-1 rounded font-mono text-[10px]">{part.slice(1, -1)}</code>;
+      if (part.startsWith("**") && part.endsWith("**")) return <strong key={i}>{part.slice(2, -2)}</strong>;
+      return part;
+    });
+  }
+
+  const SUGGESTIONS = [
+    "Como verifico se a correção foi aplicada?",
+    "Existe uma forma mais rápida de corrigir isso?",
+    "Qual o impacto de não corrigir agora?",
+    "Como faço isso via PowerShell?",
+  ];
+
+  return (
+    <Card className="border-primary/30">
+      <CardHeader className="pb-3 border-b border-primary/20">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Bot className="h-4 w-4 text-primary" />
+          Assistente de Remediação IA
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Tire dúvidas sobre como corrigir esta vulnerabilidade passo a passo.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-0 flex flex-col" style={{ maxHeight: 500 }}>
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ minHeight: 200 }}>
+          {messages.length === 0 && (
+            <div className="text-center py-4">
+              <Bot className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+              <p className="text-xs text-muted-foreground">Pergunte qualquer coisa sobre a remediação desta vulnerabilidade.</p>
+              <div className="mt-3 flex flex-wrap gap-1.5 justify-center">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => { setInput(s); }}
+                    className="text-xs border rounded-full px-3 py-1 hover:bg-muted transition-colors"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[85%] rounded-lg p-3 text-xs ${
+                  m.role === "user"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-foreground"
+                }`}
+              >
+                {m.role === "assistant" ? renderMarkdown(m.content) : m.content}
+              </div>
+            </div>
+          ))}
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="bg-muted rounded-lg p-3 flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span className="text-xs text-muted-foreground">Consultando IA...</span>
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Input */}
+        <div className="border-t p-3 flex gap-2">
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Digite sua dúvida sobre a remediação..."
+            rows={2}
+            className="text-xs resize-none flex-1"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <Button size="icon" onClick={send} disabled={!input.trim() || isLoading} className="self-end">
+            <Send className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function FindingDetail({ findingId }: { findingId: string }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  
+
   const [note, setNote] = useState("");
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<FindingStatus | null>(null);
@@ -59,7 +208,7 @@ export default function FindingDetail({ findingId }: { findingId: string }) {
 
   const confirmUpdateStatus = () => {
     if (!pendingStatus) return;
-    
+
     updateStatus.mutate(
       { findingId, data: { status: pendingStatus, note: note || undefined } },
       {
@@ -144,7 +293,7 @@ export default function FindingDetail({ findingId }: { findingId: string }) {
             </div>
           </div>
         </div>
-        
+
         <Dialog open={isUpdateOpen} onOpenChange={setIsUpdateOpen}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -174,7 +323,7 @@ export default function FindingDetail({ findingId }: { findingId: string }) {
             </DialogHeader>
             <div className="py-4">
               <label className="text-sm font-medium mb-2 block">Nota (opcional)</label>
-              <Textarea 
+              <Textarea
                 placeholder="Adicione um comentário justificando a alteração de status..."
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
@@ -202,7 +351,7 @@ export default function FindingDetail({ findingId }: { findingId: string }) {
             </CardHeader>
             <CardContent className="pt-4 prose prose-sm dark:prose-invert max-w-none">
               <p className="text-base">{finding.description}</p>
-              
+
               <h4 className="text-foreground font-semibold mt-6 mb-2">Fundamento (Rationale)</h4>
               <p>{finding.rationale}</p>
 
@@ -283,6 +432,9 @@ export default function FindingDetail({ findingId }: { findingId: string }) {
             </CardContent>
           </Card>
 
+          {/* AI Remediation Chat */}
+          <RemediationChat findingId={findingId} />
+
           {finding.evidence && (
             <Card>
               <CardHeader className="pb-3 border-b">
@@ -333,9 +485,9 @@ export default function FindingDetail({ findingId }: { findingId: string }) {
                 <ul className="space-y-3">
                   {finding.references.map((ref, idx) => (
                     <li key={idx}>
-                      <a 
-                        href={ref} 
-                        target="_blank" 
+                      <a
+                        href={ref}
+                        target="_blank"
                         rel="noreferrer noopener"
                         className="text-sm text-primary hover:underline flex items-start gap-2 break-all"
                       >
