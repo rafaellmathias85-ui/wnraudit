@@ -45,6 +45,49 @@ router.get("/oauth/ms/callback", async (req, res) => {
 
   // Erro retornado pela Microsoft (ex: admin cancelou o consent)
   if (error) {
+    // AADSTS650051: service principal already exists in this tenant.
+    // This happens when the tenant had previously connected and the SP was not removed.
+    // The consent may still be valid — attempt client_credentials verification directly.
+    const isSpAlreadyExists = (error_description ?? "").includes("AADSTS650051");
+    if (isSpAlreadyExists) {
+      const [existingTenant] = await db
+        .select()
+        .from(microsoftTenantsTable)
+        .where(
+          and(
+            eq(microsoftTenantsTable.id, tenantId),
+            eq(microsoftTenantsTable.customerId, customerId),
+          ),
+        )
+        .limit(1);
+
+      if (existingTenant) {
+        try {
+          const orgInfo = await verifyClientCredentialsAccess(existingTenant.microsoftTenantId);
+          const clientId = getWnrAuditOAuthClientId();
+          await db
+            .update(microsoftTenantsTable)
+            .set({
+              microsoftTenantId: orgInfo.tenantId,
+              primaryDomain: orgInfo.defaultDomain ?? existingTenant.primaryDomain,
+              displayName: orgInfo.displayName ?? existingTenant.displayName,
+              status: "connected",
+              provisioningStatus: "completed",
+              provisionedAppId: clientId,
+              encryptedClientSecret: null,
+              lastErrorMessage: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(microsoftTenantsTable.id, tenantId));
+
+          res.redirect(`${redirectBase}?oauth_success=true`);
+          return;
+        } catch {
+          // Credentials don't work — fall through to standard error handling
+        }
+      }
+    }
+
     const isCancelled = error_subcode === "cancel" || error === "access_denied";
     const userMsg = isCancelled
       ? "O administrador cancelou a autorização."
