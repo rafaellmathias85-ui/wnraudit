@@ -604,74 +604,63 @@ router.get(
       return;
     }
 
+    type DriveItem = {
+      id?: string;
+      name?: string;
+      webUrl?: string;
+      size?: number;
+      lastModifiedDateTime?: string;
+      file?: { mimeType?: string };
+      folder?: Record<string, unknown>;
+      parentReference?: { driveId?: string; siteId?: string; path?: string };
+    };
+
     try {
-      const data = await graphRequest<{
-        value?: Array<{
-          hitsContainers?: Array<{
-            hits?: Array<{
-              hitId?: string;
-              resource?: {
-                id?: string;
-                name?: string;
-                webUrl?: string;
-                size?: number;
-                lastModifiedDateTime?: string;
-                file?: { mimeType?: string };
-                folder?: Record<string, unknown>;
-                parentReference?: {
-                  driveId?: string;
-                  siteId?: string;
-                  path?: string;
-                  sharepointIds?: {
-                    siteId?: string;
-                    webId?: string;
-                    listId?: string;
-                    listItemUniqueId?: string;
-                  };
-                };
-              };
-            }>;
-          }>;
-        }>;
-      }>(token, "POST", "/search/query", {
-        requests: [
-          {
-            entityTypes: ["driveItem"],
-            query: { queryString: query },
-            from: 0,
-            size: 50,
-            fields: [
-              "id",
-              "name",
-              "webUrl",
-              "size",
-              "lastModifiedDateTime",
-              "file",
-              "folder",
-              "parentReference",
-            ],
-          },
-        ],
-      });
+      // Enumerate all SharePoint sites (includes root site + classic sites ignored by /search/query)
+      const sitesData = await graphRequest<{ value?: Array<{ id?: string }> }>(
+        token,
+        "GET",
+        "/sites?search=*&$select=id&$top=100",
+      );
+      const siteIds = (sitesData.value ?? []).map((s) => s.id).filter(Boolean) as string[];
 
-      const hits = data.value?.flatMap((result) =>
-        result.hitsContainers?.flatMap((container) => container.hits ?? []) ?? [],
-      ) ?? [];
+      // Also always include the root site ("/") in case it wasn't returned by search=*
+      const rootSite = await graphRequest<{ id?: string }>(token, "GET", "/sites/root?$select=id").catch(() => null);
+      if (rootSite?.id && !siteIds.includes(rootSite.id)) siteIds.unshift(rootSite.id);
 
-      const value = hits
-        .map((hit) => hit.resource)
-        .filter((resource): resource is NonNullable<typeof resource> => Boolean(resource?.id && resource?.name))
-        .map((resource) => ({
-          id: resource.id,
-          name: resource.name,
-          webUrl: resource.webUrl ?? null,
-          size: resource.size ?? null,
-          lastModifiedDateTime: resource.lastModifiedDateTime ?? null,
-          mimeType: resource.file?.mimeType ?? null,
-          isFolder: Boolean(resource.folder),
-          driveId: resource.parentReference?.driveId ?? null,
-          siteId: resource.parentReference?.siteId ?? resource.parentReference?.sharepointIds?.siteId ?? null,
-          path: resource.parentReference?.path ?? null,
+      // Search each site's drive in parallel (skip sites without drives)
+      const encoded = encodeURIComponent(query);
+      const perSite = await Promise.allSettled(
+        siteIds.map((siteId) =>
+          graphRequest<{ value?: DriveItem[] }>(
+            token,
+            "GET",
+            `/sites/${siteId}/drive/root/search(q='${encoded}')` +
+              `?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference&$top=50`,
+          ).then((d) => d.value ?? []),
+        ),
+      );
+
+      const seen = new Set<string>();
+      const value = perSite
+        .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
+        .filter((item): item is DriveItem & { id: string; name: string } => {
+          if (!item.id || !item.name) return false;
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        })
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          webUrl: item.webUrl ?? null,
+          size: item.size ?? null,
+          lastModifiedDateTime: item.lastModifiedDateTime ?? null,
+          mimeType: item.file?.mimeType ?? null,
+          isFolder: Boolean(item.folder),
+          driveId: item.parentReference?.driveId ?? null,
+          siteId: item.parentReference?.siteId ?? null,
+          path: item.parentReference?.path ?? null,
         }));
 
       res.json({ value });
