@@ -627,11 +627,19 @@ router.get(
         }>;
       };
 
-      // The Search API requires a `region` for app-only (client_credentials) tokens.
-      // We don't know the tenant's datacenter region ahead of time, so try in order:
-      // NAM (Americas) → EUR (Europe) → APC (Asia-Pacific).
+      // The Search API requires a `region` for app-only tokens.
+      // We don't know the tenant's datacenter upfront, so start with NAM and
+      // extract the valid region from the error message when it says
+      // "Only valid regions are BRA" (or any other code). Resolves in at most
+      // 2 requests regardless of where the tenant data is hosted.
+      const knownRegions = ["NAM", "EUR", "APC", "BRA", "GBR", "IND", "CAN", "AUS"];
+      const triedRegions = new Set<string>();
+      let nextRegion: string | undefined = "NAM";
       let result: SearchResponse | null = null;
-      for (const region of ["NAM", "EUR", "APC"] as const) {
+
+      while (nextRegion) {
+        const region = nextRegion;
+        triedRegions.add(region);
         try {
           result = await graphRequest<SearchResponse>(token, "POST", "/search/query", {
             requests: [
@@ -647,10 +655,16 @@ router.get(
           break;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          // If the error is NOT region-related, propagate immediately.
           if (!msg.toLowerCase().includes("region")) throw err;
-          // If we exhausted all regions, throw the last error.
-          if (region === "APC") throw err;
+
+          // Extract the valid region from "Only valid regions are BRA" etc.
+          const suggested = /valid regions? (?:are|is) ([A-Z]+)/i.exec(msg)?.[1];
+          if (suggested && !triedRegions.has(suggested)) {
+            nextRegion = suggested;
+          } else {
+            nextRegion = knownRegions.find((r) => !triedRegions.has(r));
+          }
+          if (!nextRegion) throw err;
         }
       }
 
