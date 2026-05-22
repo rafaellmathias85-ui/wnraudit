@@ -604,157 +604,46 @@ router.get(
       return;
     }
 
-    type DriveItem = {
-      id?: string;
-      name?: string;
-      webUrl?: string;
-      size?: number;
-      lastModifiedDateTime?: string;
-      file?: { mimeType?: string };
-      folder?: Record<string, unknown>;
-      parentReference?: { driveId?: string; siteId?: string; path?: string };
-    };
-
+    // Use the Microsoft Search API (POST /search/query) instead of enumerating SharePoint drives
+    // directly. The Search API goes through Microsoft Search service — not SharePoint's REST layer —
+    // so it is NOT blocked by DisableCustomAppAuthentication tenant policy.
+    // Requires Files.Read.All or Sites.Read.All (both already in REQUIRED_ADMIN_CONSOLE_ROLES).
     try {
-      const encoded = encodeURIComponent(query);
-      let firstError: string | null = null;
-
-      // Enumerate all drives across all SharePoint site types (team, communication, hub, classic).
-      // Strategy: three parallel sources whose results are unioned and deduplicated.
-      const driveIdSet = new Set<string>();
-
-      const addDrivesFromSites = async (siteIds: string[]) => {
-        const results = await Promise.allSettled(
-          siteIds.map((siteId) =>
-            graphRequest<{ value?: Array<{ id?: string }> }>(
-              token,
-              "GET",
-              `/sites/${siteId}/drives?$select=id`,
-            ).catch((e: unknown) => {
-              if (!firstError) firstError = e instanceof Error ? e.message : String(e);
-              return null;
-            }),
-          ),
-        );
-        for (const r of results) {
-          if (r.status === "fulfilled" && r.value?.value) {
-            for (const d of r.value.value) {
-              if (d.id) driveIdSet.add(d.id);
-            }
-          }
-        }
+      type SearchHit = {
+        resource?: {
+          id?: string;
+          name?: string;
+          webUrl?: string;
+          size?: number;
+          lastModifiedDateTime?: string;
+          file?: { mimeType?: string };
+          folder?: Record<string, unknown>;
+          parentReference?: { driveId?: string; siteId?: string; path?: string };
+        };
+      };
+      type SearchResponse = {
+        value?: Array<{
+          hitsContainers?: Array<{ hits?: SearchHit[] }>;
+        }>;
       };
 
-      // Source A: root site — always get this first so we can extract the SharePoint hostname.
-      const rootSite = await graphRequest<{ id?: string; webUrl?: string }>(
-        token,
-        "GET",
-        "/sites/root?$select=id,webUrl",
-      ).catch(() => null);
+      const result = await graphRequest<SearchResponse>(token, "POST", "/search/query", {
+        requests: [
+          {
+            entityTypes: ["driveItem"],
+            query: { queryString: query },
+            from: 0,
+            size: 50,
+          },
+        ],
+      });
 
-      let spHostname: string | null = null;
-      try {
-        if (rootSite?.webUrl) spHostname = new URL(rootSite.webUrl).hostname;
-      } catch { /* ignore */ }
-
-      // Source B: hostname filter — the documented approach for enumerating ALL site collections
-      // (team sites + communication sites) in a SharePoint tenant from an app-only token.
-      // Source C: getAllSites — comprehensive but may not be available in all tenants/versions.
-      // Source D: M365 Group drives — covers group-connected sites via a different Graph path.
-      const [hostnameFilterResult, allSitesResult, groupsResult] = await Promise.allSettled([
-        spHostname
-          ? graphRequest<{ value?: Array<{ id?: string }> }>(
-              token,
-              "GET",
-              `/sites?$filter=siteCollection/hostname%20eq%20'${spHostname}'&$select=id&$top=500`,
-            )
-          : Promise.resolve(null),
-        graphRequest<{ value?: Array<{ id?: string }> }>(
-          token,
-          "GET",
-          "/sites/getAllSites?$select=id&$top=500",
-        ).catch(() => null),
-        graphRequest<{ value?: Array<{ id: string }> }>(
-          token,
-          "GET",
-          "/groups?$filter=groupTypes/any(c:c%20eq%20'Unified')&$select=id&$top=200",
-        ).catch(() => null),
-      ]);
-
-      // Union all discovered site IDs
-      const siteIdSet = new Set<string>();
-      if (rootSite?.id) siteIdSet.add(rootSite.id);
-
-      const hostnameFilterValue =
-        hostnameFilterResult.status === "fulfilled" ? hostnameFilterResult.value : null;
-      for (const s of hostnameFilterValue?.value ?? []) {
-        if (s.id) siteIdSet.add(s.id);
-      }
-
-      const allSitesValue =
-        allSitesResult.status === "fulfilled" ? allSitesResult.value : null;
-      for (const s of allSitesValue?.value ?? []) {
-        if (s.id) siteIdSet.add(s.id);
-      }
-
-      // Enumerate drives from all discovered sites
-      if (siteIdSet.size > 0) await addDrivesFromSites(Array.from(siteIdSet));
-
-      // Also add M365 Group drives (sometimes group drives are not returned by site enumeration)
-      const groups =
-        groupsResult.status === "fulfilled" ? (groupsResult.value?.value ?? []) : [];
-      if (groups.length > 0) {
-        const groupDriveResults = await Promise.allSettled(
-          groups.map((g) =>
-            graphRequest<{ value?: Array<{ id?: string }> }>(
-              token,
-              "GET",
-              `/groups/${g.id}/drives?$select=id`,
-            ).catch(() => null),
-          ),
-        );
-        for (const r of groupDriveResults) {
-          if (r.status === "fulfilled" && r.value?.value) {
-            for (const d of r.value.value) {
-              if (d.id) driveIdSet.add(d.id);
-            }
-          }
-        }
-      }
-
-      const driveIds = Array.from(driveIdSet);
-
-      if (driveIds.length === 0) {
-        res.status(502).json({
-          error:
-            firstError ??
-            "Nenhum drive SharePoint acessível encontrado. Verifique se as permissões Sites.Read.All e Files.Read.All foram concedidas neste tenant (clique em Atualizar consentimento).",
-        });
-        return;
-      }
-
-      // Search all collected drives in parallel
-      const driveSearchResults = await Promise.allSettled(
-        driveIds.map((driveId) =>
-          graphRequest<{ value?: DriveItem[] }>(
-            token,
-            "GET",
-            `/drives/${driveId}/root/search(q='${encoded}')?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference&$top=50`,
-          ).then((d) => d.value ?? []),
-        ),
-      );
-
-      for (const r of driveSearchResults) {
-        if (r.status === "rejected" && !firstError) {
-          firstError = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        }
-      }
-
+      const hits = result?.value?.[0]?.hitsContainers?.[0]?.hits ?? [];
       const seen = new Set<string>();
-      const value = driveSearchResults
-        .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
-        .filter((item): item is DriveItem & { id: string; name: string } => {
-          if (!item.id || !item.name) return false;
+      const value = hits
+        .map((h) => h.resource)
+        .filter((item): item is NonNullable<typeof item> & { id: string; name: string } => {
+          if (!item?.id || !item?.name) return false;
           if (seen.has(item.id)) return false;
           seen.add(item.id);
           return true;
@@ -771,11 +660,6 @@ router.get(
           siteId: item.parentReference?.siteId ?? null,
           path: item.parentReference?.path ?? null,
         }));
-
-      if (value.length === 0 && firstError) {
-        res.status(502).json({ error: firstError });
-        return;
-      }
 
       res.json({ value });
     } catch (err) {
