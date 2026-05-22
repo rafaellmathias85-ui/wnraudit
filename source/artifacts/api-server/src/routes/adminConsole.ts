@@ -619,8 +619,8 @@ router.get(
       const encoded = encodeURIComponent(query);
       let firstError: string | null = null;
 
-      // Collect drives from all SharePoint sites, including communication sites
-      // (which are NOT linked to M365 Groups and are invisible to /sites?search=* in app-only context).
+      // Enumerate all drives across all SharePoint site types (team, communication, hub, classic).
+      // Strategy: three parallel sources whose results are unioned and deduplicated.
       const driveIdSet = new Set<string>();
 
       const addDrivesFromSites = async (siteIds: string[]) => {
@@ -645,62 +645,78 @@ router.get(
         }
       };
 
-      // Primary: getAllSites returns every site collection regardless of type —
-      // team sites, communication sites, hub sites, classic sites.
-      // This is the only reliable way to reach communication sites in app-only context.
-      const allSitesResult = await graphRequest<{ value?: Array<{ id?: string }> }>(
+      // Source A: root site — always get this first so we can extract the SharePoint hostname.
+      const rootSite = await graphRequest<{ id?: string; webUrl?: string }>(
         token,
         "GET",
-        "/sites/getAllSites?$select=id&$top=500",
+        "/sites/root?$select=id,webUrl",
       ).catch(() => null);
 
-      const allSiteIds = (allSitesResult?.value ?? []).map((s) => s.id).filter(Boolean) as string[];
+      let spHostname: string | null = null;
+      try {
+        if (rootSite?.webUrl) spHostname = new URL(rootSite.webUrl).hostname;
+      } catch { /* ignore */ }
 
-      if (allSiteIds.length > 0) {
-        await addDrivesFromSites(allSiteIds);
-      } else {
-        // Fallback when getAllSites is unavailable: root + search=* + M365 Group drives
-        const [rootSiteResult, groupsResult, searchSitesResult] = await Promise.allSettled([
-          graphRequest<{ id?: string }>(token, "GET", "/sites/root?$select=id"),
-          graphRequest<{ value?: Array<{ id: string }> }>(
-            token,
-            "GET",
-            "/groups?$filter=groupTypes/any(c:c%20eq%20'Unified')&$select=id&$top=200",
+      // Source B: hostname filter — the documented approach for enumerating ALL site collections
+      // (team sites + communication sites) in a SharePoint tenant from an app-only token.
+      // Source C: getAllSites — comprehensive but may not be available in all tenants/versions.
+      // Source D: M365 Group drives — covers group-connected sites via a different Graph path.
+      const [hostnameFilterResult, allSitesResult, groupsResult] = await Promise.allSettled([
+        spHostname
+          ? graphRequest<{ value?: Array<{ id?: string }> }>(
+              token,
+              "GET",
+              `/sites?$filter=siteCollection/hostname%20eq%20'${spHostname}'&$select=id&$top=500`,
+            )
+          : Promise.resolve(null),
+        graphRequest<{ value?: Array<{ id?: string }> }>(
+          token,
+          "GET",
+          "/sites/getAllSites?$select=id&$top=500",
+        ).catch(() => null),
+        graphRequest<{ value?: Array<{ id: string }> }>(
+          token,
+          "GET",
+          "/groups?$filter=groupTypes/any(c:c%20eq%20'Unified')&$select=id&$top=200",
+        ).catch(() => null),
+      ]);
+
+      // Union all discovered site IDs
+      const siteIdSet = new Set<string>();
+      if (rootSite?.id) siteIdSet.add(rootSite.id);
+
+      const hostnameFilterValue =
+        hostnameFilterResult.status === "fulfilled" ? hostnameFilterResult.value : null;
+      for (const s of hostnameFilterValue?.value ?? []) {
+        if (s.id) siteIdSet.add(s.id);
+      }
+
+      const allSitesValue =
+        allSitesResult.status === "fulfilled" ? allSitesResult.value : null;
+      for (const s of allSitesValue?.value ?? []) {
+        if (s.id) siteIdSet.add(s.id);
+      }
+
+      // Enumerate drives from all discovered sites
+      if (siteIdSet.size > 0) await addDrivesFromSites(Array.from(siteIdSet));
+
+      // Also add M365 Group drives (sometimes group drives are not returned by site enumeration)
+      const groups =
+        groupsResult.status === "fulfilled" ? (groupsResult.value?.value ?? []) : [];
+      if (groups.length > 0) {
+        const groupDriveResults = await Promise.allSettled(
+          groups.map((g) =>
+            graphRequest<{ value?: Array<{ id?: string }> }>(
+              token,
+              "GET",
+              `/groups/${g.id}/drives?$select=id`,
+            ).catch(() => null),
           ),
-          graphRequest<{ value?: Array<{ id?: string }> }>(
-            token,
-            "GET",
-            "/sites?search=*&$select=id&$top=100",
-          ),
-        ]);
-
-        const fallbackSiteIds = new Set<string>();
-        if (rootSiteResult.status === "fulfilled" && rootSiteResult.value.id) {
-          fallbackSiteIds.add(rootSiteResult.value.id);
-        }
-        if (searchSitesResult.status === "fulfilled") {
-          for (const s of searchSitesResult.value.value ?? []) {
-            if (s.id) fallbackSiteIds.add(s.id);
-          }
-        }
-        if (fallbackSiteIds.size > 0) await addDrivesFromSites(Array.from(fallbackSiteIds));
-
-        const groups = groupsResult.status === "fulfilled" ? (groupsResult.value.value ?? []) : [];
-        if (groups.length > 0) {
-          const groupDriveResults = await Promise.allSettled(
-            groups.map((g) =>
-              graphRequest<{ value?: Array<{ id?: string }> }>(
-                token,
-                "GET",
-                `/groups/${g.id}/drives?$select=id`,
-              ).catch(() => null),
-            ),
-          );
-          for (const r of groupDriveResults) {
-            if (r.status === "fulfilled" && r.value?.value) {
-              for (const d of r.value.value) {
-                if (d.id) driveIdSet.add(d.id);
-              }
+        );
+        for (const r of groupDriveResults) {
+          if (r.status === "fulfilled" && r.value?.value) {
+            for (const d of r.value.value) {
+              if (d.id) driveIdSet.add(d.id);
             }
           }
         }
