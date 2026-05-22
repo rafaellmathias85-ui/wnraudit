@@ -5,6 +5,7 @@ import {
   AppWindow,
   Ban,
   CheckCircle2,
+  Download,
   Eye,
   ExternalLink,
   FileSearch,
@@ -270,6 +271,24 @@ export default function AdminConsole() {
         variant: "destructive",
         title: "Falha ao abrir preview",
         description: error instanceof Error ? error.message : "Nao foi possivel abrir o arquivo.",
+      }),
+  });
+
+  const downloadMutation = useMutation({
+    mutationFn: async (file: TenantFile) => {
+      if (!tenantId) throw new Error("Selecione um tenant.");
+      if (!file.driveId) throw new Error("Este item nao tem driveId para download.");
+      const result = await apiFetch<{ downloadUrl: string }>(
+        `/admin-console/tenants/${tenantId}/files/download?driveId=${encodeURIComponent(file.driveId)}&itemId=${encodeURIComponent(file.id)}`,
+      );
+      return result.downloadUrl;
+    },
+    onSuccess: (url) => window.open(url, "_blank", "noopener,noreferrer"),
+    onError: (error) =>
+      toast({
+        variant: "destructive",
+        title: "Falha ao baixar arquivo",
+        description: error instanceof Error ? error.message : "Nao foi possivel obter o link de download.",
       }),
   });
 
@@ -824,68 +843,82 @@ export default function AdminConsole() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Arquivo</TableHead>
-                          <TableHead>Tipo</TableHead>
-                          <TableHead>Origem</TableHead>
-                          <TableHead>Modificado</TableHead>
-                          <TableHead className="text-right">Ações</TableHead>
+                          <TableHead className="w-20">Tipo</TableHead>
+                          <TableHead className="w-36">Modificado</TableHead>
+                          <TableHead className="w-28 text-right">Ações</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {files.map((file) => (
-                          <TableRow key={`${file.driveId}-${file.id}`}>
-                            <TableCell>
-                              <div className="flex items-start gap-3">
-                                {file.isFolder ? (
-                                  <FolderOpen className="h-4 w-4 text-muted-foreground mt-1" />
-                                ) : (
-                                  <FileText className="h-4 w-4 text-muted-foreground mt-1" />
-                                )}
-                                <div>
-                                  <div className="font-medium">{file.name}</div>
-                                  <div className="text-xs text-muted-foreground max-w-[460px] truncate">
-                                    {file.path || file.webUrl || file.id}
+                        {files.map((file) => {
+                          const ext = !file.isFolder && file.name.includes(".")
+                            ? file.name.split(".").pop()?.toUpperCase()
+                            : null;
+                          return (
+                            <TableRow key={`${file.driveId}-${file.id}`}>
+                              <TableCell>
+                                <div className="flex items-start gap-3">
+                                  {file.isFolder ? (
+                                    <FolderOpen className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                                  ) : (
+                                    <FileText className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                                  )}
+                                  <div className="min-w-0">
+                                    <div className="font-medium truncate">{file.name}</div>
+                                    <div className="text-xs text-muted-foreground max-w-xs truncate">
+                                      {file.path || file.webUrl || file.id}
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="outline">
-                                {file.isFolder ? "Pasta" : file.mimeType?.split("/").pop() || "Arquivo"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs text-muted-foreground">
-                              {file.driveId ? file.driveId.slice(0, 8) : "-"}
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {file.lastModifiedDateTime
-                                ? new Date(file.lastModifiedDateTime).toLocaleString("pt-BR")
-                                : "-"}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex justify-end gap-1">
-                                {!file.isFolder && file.driveId && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => previewMutation.mutate(file)}
-                                    disabled={previewMutation.isPending}
-                                  >
-                                    <Eye className="h-4 w-4" />
-                                  </Button>
-                                )}
-                                {file.webUrl && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => window.open(file.webUrl!, "_blank", "noopener,noreferrer")}
-                                  >
-                                    <ExternalLink className="h-4 w-4" />
-                                  </Button>
-                                )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="font-mono text-[11px]">
+                                  {file.isFolder ? "Pasta" : ext || "Arquivo"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                                {file.lastModifiedDateTime
+                                  ? new Date(file.lastModifiedDateTime).toLocaleDateString("pt-BR")
+                                  : "-"}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex justify-end gap-1">
+                                  {!file.isFolder && file.driveId && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      title="Visualizar"
+                                      onClick={() => previewMutation.mutate(file)}
+                                      disabled={previewMutation.isPending}
+                                    >
+                                      <Eye className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                  {file.webUrl && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      title="Abrir/Editar no Microsoft 365"
+                                      onClick={() => window.open(file.webUrl!, "_blank", "noopener,noreferrer")}
+                                    >
+                                      <ExternalLink className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                  {!file.isFolder && file.driveId && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      title="Baixar"
+                                      onClick={() => downloadMutation.mutate(file)}
+                                      disabled={downloadMutation.isPending}
+                                    >
+                                      <Download className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   )}

@@ -784,6 +784,45 @@ router.get(
   },
 );
 
+router.get(
+  "/admin-console/tenants/:tenantId/files/download",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const token = await withTenantToken(req.customer!.id, routeParam(req.params.tenantId), res);
+    if (!token) return;
+
+    const driveId = asString(req.query.driveId as string);
+    const itemId = asString(req.query.itemId as string);
+    if (!driveId || !itemId) {
+      res.status(400).json({ error: "driveId e itemId sao obrigatorios." });
+      return;
+    }
+
+    try {
+      // Graph /content redirects to a pre-authenticated download URL (Location header).
+      // We return that URL to the client so it can open it directly in the browser.
+      const contentRes = await fetch(
+        `${GRAPH_BASE}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/content`,
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+          redirect: "manual",
+        },
+      );
+
+      const location = contentRes.headers.get("location");
+      if (!location) {
+        res.status(502).json({ error: "URL de download nao disponivel para este arquivo." });
+        return;
+      }
+
+      res.json({ downloadUrl: location });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
 router.post(
   "/admin-console/tenants/:tenantId/files/preview",
   requireAuth,
