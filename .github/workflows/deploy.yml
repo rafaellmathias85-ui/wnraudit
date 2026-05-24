@@ -13,14 +13,18 @@ jobs:
         run: |
           APP_ROOT="/var/www/wnraudit"
           APP_DIR="$APP_ROOT/app"
-          DEPLOY_USER="$(id -un)"
-          DEPLOY_GROUP="$(id -gn)"
+          DEPLOY_UID="$(id -u)"
+          DEPLOY_GID="$(id -g)"
 
           sudo mkdir -p "$APP_DIR"
-          sudo chown -R "$DEPLOY_USER:$DEPLOY_GROUP" "$APP_ROOT"
+          sudo chown -R "$DEPLOY_UID:$DEPLOY_GID" "$APP_ROOT"
           cd "$APP_DIR"
 
           if [ ! -d ".git" ]; then
+            if [ "$(find . -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
+              echo "ERRO: $APP_DIR existe, mas nao e um repositorio Git vazio."
+              exit 1
+            fi
             git clone https://github.com/rafaellmathias85-ui/wnraudit.git .
           fi
 
