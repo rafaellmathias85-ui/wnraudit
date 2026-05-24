@@ -13,10 +13,11 @@ jobs:
         run: |
           APP_ROOT="/var/www/wnraudit"
           APP_DIR="$APP_ROOT/app"
-          DEPLOY_USER="adminwti"
+          DEPLOY_USER="$(id -un)"
+          DEPLOY_GROUP="$(id -gn)"
 
           sudo mkdir -p "$APP_DIR"
-          sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" "$APP_ROOT"
+          sudo chown -R "$DEPLOY_USER:$DEPLOY_GROUP" "$APP_ROOT"
           cd "$APP_DIR"
 
           if [ ! -d ".git" ]; then
