@@ -77,7 +77,7 @@ app.use(clerkMiddleware());
 app.use("/api", router);
 
 app.use((_req, res) => {
-  res.redirect(301, "https://wnrtecnologia.com.br/wnraudit");
+  res.redirect(301, "https://wnrtecnologia.com.br/wnraudit/app/");
 });
 
 export default app;

@@ -11,9 +11,13 @@ jobs:
     steps:
       - name: Deploy on VPS
         run: |
-          sudo mkdir -p /var/www/audit/app
-          sudo chown -R ubuntu:ubuntu /var/www/audit
-          cd /var/www/audit/app
+          APP_ROOT="/var/www/wnraudit"
+          APP_DIR="$APP_ROOT/app"
+          DEPLOY_USER="adminwti"
+
+          sudo mkdir -p "$APP_DIR"
+          sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" "$APP_ROOT"
+          cd "$APP_DIR"
 
           if [ ! -d ".git" ]; then
             git clone https://github.com/rafaellmathias85-ui/wnraudit.git .
@@ -21,25 +25,25 @@ jobs:
 
           # PRESERVAR source/.env antes do git reset
           if [ -f "source/.env" ]; then
-            cp source/.env /var/www/audit/.env.backup
+            cp source/.env "$APP_ROOT/.env.backup"
           fi
 
-          git config --global --add safe.directory /var/www/audit/app
+          git config --global --add safe.directory "$APP_DIR"
           git fetch origin main
           git reset --hard origin/main
 
           # RESTAURAR source/.env apos git reset
-          if [ -f "/var/www/audit/.env.backup" ]; then
-            cp /var/www/audit/.env.backup source/.env
+          if [ -f "$APP_ROOT/.env.backup" ]; then
+            cp "$APP_ROOT/.env.backup" source/.env
           fi
 
           if [ -f "deploy.sh" ]; then
-            cp deploy.sh /var/www/audit/deploy.sh
-            chmod +x /var/www/audit/deploy.sh
+            cp deploy.sh "$APP_ROOT/deploy.sh"
+            chmod +x "$APP_ROOT/deploy.sh"
           fi
 
-          if [ -f "/var/www/audit/deploy.sh" ]; then
-            bash /var/www/audit/deploy.sh
+          if [ -f "$APP_ROOT/deploy.sh" ]; then
+            bash "$APP_ROOT/deploy.sh"
           else
             echo "ERRO: deploy.sh nao encontrado!"
             exit 1

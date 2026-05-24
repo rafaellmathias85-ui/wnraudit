@@ -1,7 +1,27 @@
 #!/bin/bash
 set -e
 
-APP_SOURCE="/var/www/audit/app/source"
+APP_SOURCE="/var/www/wnraudit/app/source"
+export BASE_PATH="${BASE_PATH:-/wnraudit/app/}"
+export FRONTEND_BASE_URL="${FRONTEND_BASE_URL:-https://wnrtecnologia.com.br/wnraudit/app}"
+
+if [ ! -f "$APP_SOURCE/.env" ]; then
+  echo "ERRO: $APP_SOURCE/.env nao encontrado. Configure o .env isolado do WNR-Audit antes do deploy."
+  exit 1
+fi
+
+set_env_var() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$APP_SOURCE/.env"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$APP_SOURCE/.env"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$APP_SOURCE/.env"
+  fi
+}
+
+set_env_var "BASE_PATH" "$BASE_PATH"
+set_env_var "FRONTEND_BASE_URL" "$FRONTEND_BASE_URL"
 
 echo "==> Instalando dependencias..."
 cd "$APP_SOURCE"
