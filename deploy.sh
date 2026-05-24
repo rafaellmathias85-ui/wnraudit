@@ -6,8 +6,8 @@ export BASE_PATH="${BASE_PATH:-/wnraudit/app/}"
 export FRONTEND_BASE_URL="${FRONTEND_BASE_URL:-https://wnrtecnologia.com.br/wnraudit/app}"
 
 if [ ! -f "$APP_SOURCE/.env" ]; then
-  echo "ERRO: $APP_SOURCE/.env nao encontrado. Configure o .env isolado do WNR-Audit antes do deploy."
-  exit 1
+  echo "==> $APP_SOURCE/.env nao encontrado. Criando .env isolado a partir de .env.example..."
+  cp "$APP_SOURCE/../.env.example" "$APP_SOURCE/.env"
 fi
 
 set_env_var() {
