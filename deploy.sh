@@ -100,10 +100,15 @@ patterns = [
 for pattern in patterns:
     text = re.sub(pattern, "", text)
 
-if "  location / {" not in text:
-    raise SystemExit("Nao encontrei 'location / {' para inserir o bloco do WNR Audit.")
+location_root = re.search(r"\n\s*location\s+/(\s+)?\{", text)
+if location_root:
+    text = text[: location_root.start()] + block + text[location_root.start() :]
+else:
+    server_close = text.rfind("\n}")
+    if server_close == -1:
+        raise SystemExit("Nao encontrei fechamento do bloco server para inserir o WNR Audit.")
+    text = text[:server_close] + block + text[server_close:]
 
-text = text.replace("  location / {", block + "  location / {", 1)
 path.write_text(text)
 PY
 
