@@ -29,7 +29,7 @@ set_env_var "FRONTEND_BASE_URL" "$FRONTEND_BASE_URL"
 echo "==> Instalando dependencias..."
 cd "$APP_SOURCE"
 if ! command -v pnpm >/dev/null 2>&1; then
-  corepack enable
+  sudo npm install -g pnpm
 fi
 pnpm install --frozen-lockfile
 
