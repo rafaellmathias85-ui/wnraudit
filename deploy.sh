@@ -31,7 +31,7 @@ fi
 pnpm install --frozen-lockfile
 
 echo "==> Build de producao..."
-NODE_ENV=production pnpm run build
+NODE_ENV=production pnpm -r --if-present run build
 
 echo "==> Reiniciando servico wnraudit-api..."
 sudo systemctl restart wnraudit-api
@@ -104,7 +104,7 @@ def find_matching_brace(value: str, open_brace: int) -> int:
     return -1
 
 server_matches = list(re.finditer(r"\bserver\s*\{", text))
-target = None
+targets = []
 for match in server_matches:
     open_brace = text.find("{", match.start())
     close_brace = find_matching_brace(text, open_brace)
@@ -112,34 +112,37 @@ for match in server_matches:
         continue
     server_text = text[match.start() : close_brace + 1]
     if "wnrtecnologia.com.br" in server_text or "4.228.218.45" in server_text:
-        target = (match.start(), close_brace)
-        break
+        targets.append((match.start(), close_brace))
 
-if target is None:
+if not targets:
     raise SystemExit("Nao encontrei o bloco server do wnrtecnologia para inserir o WNR Audit.")
 
-start, close = target
-server_text = text[start : close + 1]
+print(f"Injetando em {len(targets)} bloco(s) server correspondente(s).")
+
 patterns = [
     r"\n\s*location = /wnraudit/app \{[\s\S]*?\n\s*\}",
     r"\n\s*location \^~ /wnraudit/app/api/ \{[\s\S]*?\n\s*\}",
     r"\n\s*location \^~ /wnraudit/app/ \{[\s\S]*?\n\s*\}",
     r"\n\s*location = /wnraudit-app-index\.html \{[\s\S]*?\n\s*\}",
 ]
-for pattern in patterns:
-    server_text = re.sub(pattern, "", server_text)
 
-location_root = re.search(r"\n\s*location\s+/(\s+)?\{", server_text)
-if location_root:
-    server_text = (
-        server_text[: location_root.start()]
-        + block
-        + server_text[location_root.start() :]
-    )
-else:
-    server_text = server_text[:-1] + block + "\n}"
+# Processar em ordem reversa para preservar os offsets dos blocos anteriores
+for start, close in reversed(targets):
+    server_text = text[start : close + 1]
+    for pattern in patterns:
+        server_text = re.sub(pattern, "", server_text)
 
-text = text[:start] + server_text + text[close + 1 :]
+    location_root = re.search(r"\n\s*location\s+/(\s+)?\{", server_text)
+    if location_root:
+        server_text = (
+            server_text[: location_root.start()]
+            + block
+            + server_text[location_root.start() :]
+        )
+    else:
+        server_text = server_text[:-1] + block + "\n}"
+
+    text = text[:start] + server_text + text[close + 1 :]
 
 path.write_text(text)
 PY
@@ -147,6 +150,6 @@ PY
 sudo ln -sf "$NGINX_FILE" /etc/nginx/sites-enabled/wnrtecnologia
 sudo nginx -t
 sudo systemctl reload nginx
-curl -sfI -H "Host: wnrtecnologia.com.br" http://127.0.0.1/wnraudit/app/ >/dev/null || (echo "ERRO: Nginx nao serviu /wnraudit/app/" && exit 1)
+curl -sfL -H "Host: wnrtecnologia.com.br" http://127.0.0.1/wnraudit/app/ >/dev/null || (echo "ERRO: Nginx nao serviu /wnraudit/app/" && exit 1)
 
 echo "==> Deploy WNR-Audit concluido com sucesso."
