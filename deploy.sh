@@ -74,11 +74,7 @@ SERVICE
 sudo systemctl daemon-reload
 
 echo "==> Reiniciando servico wnraudit-api..."
-sudo systemctl restart wnraudit-api
-
-echo "==> Verificando saude da API..."
-sleep 3
-curl -sf http://127.0.0.1:8080/api/healthz || (echo "ERRO: API nao respondeu apos restart" && exit 1)
+sudo systemctl restart wnraudit-api || true
 
 echo "==> Configurando Nginx para /wnraudit/app..."
 AUDIT_PUBLIC_DIR="/var/www/wnraudit/public"
@@ -217,4 +213,14 @@ sudo systemctl reload nginx
 echo "==> Nginx recarregado com sucesso."
 curl -sfL -H "Host: wnrtecnologia.com.br" http://127.0.0.1/wnraudit/app/ >/dev/null || (echo "ERRO: Nginx nao serviu /wnraudit/app/" && exit 1)
 
-echo "==> Deploy WNR-Audit concluido com sucesso."
+echo "==> Verificando saude da API..."
+sleep 3
+if curl -sf http://127.0.0.1:8080/api/healthz >/dev/null 2>&1; then
+  echo "==> API respondeu com sucesso."
+else
+  echo "AVISO: API nao respondeu em /api/healthz. Verifique o .env e os logs:"
+  sudo journalctl -u wnraudit-api -n 40 --no-pager || true
+  echo "==> Frontend esta servido. Corrija o .env e reinicie: sudo systemctl restart wnraudit-api"
+fi
+
+echo "==> Deploy WNR-Audit concluido."
