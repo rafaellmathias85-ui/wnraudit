@@ -91,6 +91,35 @@ block = f"""
 
 """
 
+def find_matching_brace(value: str, open_brace: int) -> int:
+    depth = 0
+    for index in range(open_brace, len(value)):
+        char = value[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+server_matches = list(re.finditer(r"\bserver\s*\{", text))
+target = None
+for match in server_matches:
+    open_brace = text.find("{", match.start())
+    close_brace = find_matching_brace(text, open_brace)
+    if close_brace == -1:
+        continue
+    server_text = text[match.start() : close_brace + 1]
+    if "wnrtecnologia.com.br" in server_text or "4.228.218.45" in server_text:
+        target = (match.start(), close_brace)
+        break
+
+if target is None:
+    raise SystemExit("Nao encontrei o bloco server do wnrtecnologia para inserir o WNR Audit.")
+
+start, close = target
+server_text = text[start : close + 1]
 patterns = [
     r"\n\s*location = /wnraudit/app \{[\s\S]*?\n\s*\}",
     r"\n\s*location \^~ /wnraudit/app/api/ \{[\s\S]*?\n\s*\}",
@@ -98,22 +127,26 @@ patterns = [
     r"\n\s*location = /wnraudit-app-index\.html \{[\s\S]*?\n\s*\}",
 ]
 for pattern in patterns:
-    text = re.sub(pattern, "", text)
+    server_text = re.sub(pattern, "", server_text)
 
-location_root = re.search(r"\n\s*location\s+/(\s+)?\{", text)
+location_root = re.search(r"\n\s*location\s+/(\s+)?\{", server_text)
 if location_root:
-    text = text[: location_root.start()] + block + text[location_root.start() :]
+    server_text = (
+        server_text[: location_root.start()]
+        + block
+        + server_text[location_root.start() :]
+    )
 else:
-    server_close = text.rfind("\n}")
-    if server_close == -1:
-        raise SystemExit("Nao encontrei fechamento do bloco server para inserir o WNR Audit.")
-    text = text[:server_close] + block + text[server_close:]
+    server_text = server_text[:-1] + block + "\n}"
+
+text = text[:start] + server_text + text[close + 1 :]
 
 path.write_text(text)
 PY
 
+sudo ln -sf "$NGINX_FILE" /etc/nginx/sites-enabled/wnrtecnologia
 sudo nginx -t
 sudo systemctl reload nginx
-curl -sfI http://127.0.0.1/wnraudit/app/ >/dev/null || (echo "ERRO: Nginx nao serviu /wnraudit/app/" && exit 1)
+curl -sfI -H "Host: wnrtecnologia.com.br" http://127.0.0.1/wnraudit/app/ >/dev/null || (echo "ERRO: Nginx nao serviu /wnraudit/app/" && exit 1)
 
 echo "==> Deploy WNR-Audit concluido com sucesso."
