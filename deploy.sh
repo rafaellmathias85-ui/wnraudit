@@ -41,19 +41,39 @@ sleep 3
 curl -sf http://127.0.0.1:8080/api/healthz || (echo "ERRO: API nao respondeu apos restart" && exit 1)
 
 echo "==> Configurando Nginx para /wnraudit/app..."
-NGINX_FILE="/etc/nginx/sites-available/wnrtecnologia"
 AUDIT_PUBLIC_DIR="$APP_SOURCE/artifacts/wnr-audit/dist/public"
 if [ ! -f "$AUDIT_PUBLIC_DIR/index.html" ]; then
   echo "ERRO: build do frontend nao encontrou $AUDIT_PUBLIC_DIR/index.html"
   exit 1
 fi
 
-if [ ! -f "$NGINX_FILE" ]; then
-  echo "ERRO: arquivo do Nginx nao encontrado em $NGINX_FILE"
+# Auto-detectar o arquivo de configuracao nginx do dominio
+NGINX_FILE=""
+for candidate in \
+  "/etc/nginx/sites-available/wnrtecnologia" \
+  "/etc/nginx/sites-available/wnrtecnologia.com.br" \
+  "/etc/nginx/conf.d/wnrtecnologia.conf" \
+  "/etc/nginx/sites-available/default" \
+  "/etc/nginx/nginx.conf"; do
+  if sudo test -f "$candidate" && sudo grep -qE "wnrtecnologia\.com\.br|4\.228\.218\.45" "$candidate"; then
+    NGINX_FILE="$candidate"
+    echo "==> Nginx config encontrado em: $NGINX_FILE"
+    break
+  fi
+done
+
+if [ -z "$NGINX_FILE" ]; then
+  echo "ERRO: Nao foi possivel encontrar o arquivo nginx que referencia wnrtecnologia.com.br"
+  echo "==> Arquivos em sites-available:"
+  sudo ls -la /etc/nginx/sites-available/ 2>/dev/null || true
+  echo "==> Arquivos em conf.d:"
+  sudo ls -la /etc/nginx/conf.d/ 2>/dev/null || true
   exit 1
 fi
 
-sudo cp "$NGINX_FILE" "$NGINX_FILE.bak.$(date +%Y%m%d%H%M%S)"
+NGINX_BAK="$NGINX_FILE.wnraudit-bak"
+sudo cp "$NGINX_FILE" "$NGINX_BAK"
+
 sudo AUDIT_PUBLIC_DIR="$AUDIT_PUBLIC_DIR" NGINX_FILE="$NGINX_FILE" python3 - <<'PY'
 from pathlib import Path
 import os
@@ -148,8 +168,18 @@ path.write_text(text)
 PY
 
 sudo ln -sf "$NGINX_FILE" /etc/nginx/sites-enabled/wnrtecnologia
-sudo nginx -t
+
+echo "==> Validando configuracao nginx..."
+if ! sudo nginx -t 2>&1; then
+  echo "ERRO: nginx -t falhou. Restaurando backup de $NGINX_BAK..."
+  sudo cp "$NGINX_BAK" "$NGINX_FILE"
+  sudo nginx -t && sudo systemctl reload nginx
+  echo "ERRO: Backup restaurado. Inspecione o nginx config manualmente."
+  exit 1
+fi
+
 sudo systemctl reload nginx
+echo "==> Nginx recarregado com sucesso."
 curl -sfL -H "Host: wnrtecnologia.com.br" http://127.0.0.1/wnraudit/app/ >/dev/null || (echo "ERRO: Nginx nao serviu /wnraudit/app/" && exit 1)
 
 echo "==> Deploy WNR-Audit concluido com sucesso."
