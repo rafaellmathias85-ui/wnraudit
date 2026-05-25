@@ -25,6 +25,9 @@ set_env_var "FRONTEND_BASE_URL" "$FRONTEND_BASE_URL"
 
 echo "==> Instalando dependencias..."
 cd "$APP_SOURCE"
+if ! command -v pnpm >/dev/null 2>&1; then
+  corepack enable
+fi
 pnpm install --frozen-lockfile
 
 echo "==> Build de producao..."
@@ -36,5 +39,76 @@ sudo systemctl restart wnraudit-api
 echo "==> Verificando saude da API..."
 sleep 3
 curl -sf http://127.0.0.1:8080/api/healthz || (echo "ERRO: API nao respondeu apos restart" && exit 1)
+
+echo "==> Configurando Nginx para /wnraudit/app..."
+NGINX_FILE="/etc/nginx/sites-available/wnrtecnologia"
+AUDIT_PUBLIC_DIR="$APP_SOURCE/artifacts/wnr-audit/dist/public"
+if [ ! -f "$AUDIT_PUBLIC_DIR/index.html" ]; then
+  echo "ERRO: build do frontend nao encontrou $AUDIT_PUBLIC_DIR/index.html"
+  exit 1
+fi
+
+if [ ! -f "$NGINX_FILE" ]; then
+  echo "ERRO: arquivo do Nginx nao encontrado em $NGINX_FILE"
+  exit 1
+fi
+
+sudo cp "$NGINX_FILE" "$NGINX_FILE.bak.$(date +%Y%m%d%H%M%S)"
+sudo AUDIT_PUBLIC_DIR="$AUDIT_PUBLIC_DIR" NGINX_FILE="$NGINX_FILE" python3 - <<'PY'
+from pathlib import Path
+import os
+import re
+
+path = Path(os.environ["NGINX_FILE"])
+public_dir = os.environ["AUDIT_PUBLIC_DIR"].rstrip("/")
+text = path.read_text()
+
+block = f"""
+  location = /wnraudit/app {{
+    return 301 /wnraudit/app/;
+  }}
+
+  location ^~ /wnraudit/app/api/ {{
+    rewrite ^/wnraudit/app/api/(.*)$ /api/$1 break;
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }}
+
+  location ^~ /wnraudit/app/ {{
+    alias {public_dir}/;
+    index index.html;
+    try_files $uri $uri/ /wnraudit-app-index.html;
+  }}
+
+  location = /wnraudit-app-index.html {{
+    internal;
+    alias {public_dir}/index.html;
+  }}
+
+"""
+
+patterns = [
+    r"\n\s*location = /wnraudit/app \{[\s\S]*?\n\s*\}",
+    r"\n\s*location \^~ /wnraudit/app/api/ \{[\s\S]*?\n\s*\}",
+    r"\n\s*location \^~ /wnraudit/app/ \{[\s\S]*?\n\s*\}",
+    r"\n\s*location = /wnraudit-app-index\.html \{[\s\S]*?\n\s*\}",
+]
+for pattern in patterns:
+    text = re.sub(pattern, "", text)
+
+if "  location / {" not in text:
+    raise SystemExit("Nao encontrei 'location / {' para inserir o bloco do WNR Audit.")
+
+text = text.replace("  location / {", block + "  location / {", 1)
+path.write_text(text)
+PY
+
+sudo nginx -t
+sudo systemctl reload nginx
+curl -sfI http://127.0.0.1/wnraudit/app/ >/dev/null || (echo "ERRO: Nginx nao serviu /wnraudit/app/" && exit 1)
 
 echo "==> Deploy WNR-Audit concluido com sucesso."
