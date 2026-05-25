@@ -1,13 +1,16 @@
 #!/bin/bash
 set -e
 
-APP_SOURCE="/var/www/wnraudit/app/source"
+# APP_SOURCE vem do CI (actions/checkout) ou usa path legado como fallback
+APP_SOURCE="${APP_SOURCE:-/var/www/wnraudit/app/source}"
 export BASE_PATH="${BASE_PATH:-/wnraudit/app/}"
 export FRONTEND_BASE_URL="${FRONTEND_BASE_URL:-https://wnrtecnologia.com.br/wnraudit/app}"
 
+echo "==> APP_SOURCE: $APP_SOURCE"
+
 if [ ! -f "$APP_SOURCE/.env" ]; then
-  echo "==> $APP_SOURCE/.env nao encontrado. Criando .env isolado a partir de .env.example..."
-  cp "$APP_SOURCE/../.env.example" "$APP_SOURCE/.env"
+  echo "==> .env nao encontrado. Criando a partir de .env.example..."
+  cp "$APP_SOURCE/.env.example" "$APP_SOURCE/.env"
 fi
 
 set_env_var() {
@@ -33,6 +36,43 @@ pnpm install --frozen-lockfile
 echo "==> Build de producao..."
 NODE_ENV=production pnpm -r --if-present run build
 
+echo "==> Copiando frontend para /var/www/wnraudit/public/..."
+FRONTEND_DIST="$APP_SOURCE/artifacts/wnr-audit/dist/public"
+if [ ! -f "$FRONTEND_DIST/index.html" ]; then
+  echo "ERRO: build do frontend nao encontrou $FRONTEND_DIST/index.html"
+  exit 1
+fi
+sudo mkdir -p /var/www/wnraudit/public
+sudo cp -r "$FRONTEND_DIST/." /var/www/wnraudit/public/
+sudo chown -R www-data:www-data /var/www/wnraudit/public/
+echo "==> Frontend copiado para /var/www/wnraudit/public/"
+
+echo "==> Configurando servico wnraudit-api..."
+API_DIR="$APP_SOURCE/artifacts/api-server"
+NODE_BIN="$(which node)"
+ENV_FILE="$APP_SOURCE/.env"
+
+sudo tee /etc/systemd/system/wnraudit-api.service > /dev/null <<SERVICE
+[Unit]
+Description=WNR Audit API Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=$API_DIR
+ExecStart=$NODE_BIN --enable-source-maps ./dist/index.mjs
+EnvironmentFile=$ENV_FILE
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+sudo systemctl daemon-reload
+
 echo "==> Reiniciando servico wnraudit-api..."
 sudo systemctl restart wnraudit-api
 
@@ -41,11 +81,7 @@ sleep 3
 curl -sf http://127.0.0.1:8080/api/healthz || (echo "ERRO: API nao respondeu apos restart" && exit 1)
 
 echo "==> Configurando Nginx para /wnraudit/app..."
-AUDIT_PUBLIC_DIR="$APP_SOURCE/artifacts/wnr-audit/dist/public"
-if [ ! -f "$AUDIT_PUBLIC_DIR/index.html" ]; then
-  echo "ERRO: build do frontend nao encontrou $AUDIT_PUBLIC_DIR/index.html"
-  exit 1
-fi
+AUDIT_PUBLIC_DIR="/var/www/wnraudit/public"
 
 # Auto-detectar o arquivo de configuracao nginx do dominio
 NGINX_FILE=""
@@ -171,10 +207,9 @@ sudo ln -sf "$NGINX_FILE" /etc/nginx/sites-enabled/wnrtecnologia
 
 echo "==> Validando configuracao nginx..."
 if ! sudo nginx -t 2>&1; then
-  echo "ERRO: nginx -t falhou. Restaurando backup de $NGINX_BAK..."
+  echo "ERRO: nginx -t falhou. Restaurando backup..."
   sudo cp "$NGINX_BAK" "$NGINX_FILE"
   sudo nginx -t && sudo systemctl reload nginx
-  echo "ERRO: Backup restaurado. Inspecione o nginx config manualmente."
   exit 1
 fi
 

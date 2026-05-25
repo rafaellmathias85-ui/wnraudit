@@ -10,47 +10,24 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Deploy on VPS
+      - name: Preservar .env antes do checkout
         run: |
-          APP_ROOT="/var/www/wnraudit"
-          APP_DIR="$APP_ROOT/app"
-          DEPLOY_UID="$(id -u)"
-          DEPLOY_GID="$(id -g)"
-
-          sudo mkdir -p "$APP_DIR"
-          sudo chown -R "$DEPLOY_UID:$DEPLOY_GID" "$APP_ROOT"
-          cd "$APP_DIR"
-
-          if [ ! -d ".git" ]; then
-            if [ "$(find . -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
-              echo "ERRO: $APP_DIR existe, mas nao e um repositorio Git vazio."
-              exit 1
-            fi
-            git clone https://github.com/rafaellmathias85-ui/wnraudit.git .
+          ENV="$GITHUB_WORKSPACE/source/.env"
+          if [ -f "$ENV" ]; then
+            cp "$ENV" "$HOME/.wnraudit-env.bak"
           fi
 
-          # PRESERVAR source/.env antes do git reset
-          if [ -f "source/.env" ]; then
-            cp source/.env "$APP_ROOT/.env.backup"
+      - uses: actions/checkout@v4
+
+      - name: Restaurar .env apos checkout
+        run: |
+          BAK="$HOME/.wnraudit-env.bak"
+          DEST="$GITHUB_WORKSPACE/source/.env"
+          if [ -f "$BAK" ]; then
+            cp "$BAK" "$DEST"
           fi
 
-          git config --global --add safe.directory "$APP_DIR"
-          git fetch origin main
-          git reset --hard origin/main
-
-          # RESTAURAR source/.env apos git reset
-          if [ -f "$APP_ROOT/.env.backup" ]; then
-            cp "$APP_ROOT/.env.backup" source/.env
-          fi
-
-          if [ -f "deploy.sh" ]; then
-            cp deploy.sh "$APP_ROOT/deploy.sh"
-            chmod +x "$APP_ROOT/deploy.sh"
-          fi
-
-          if [ -f "$APP_ROOT/deploy.sh" ]; then
-            bash "$APP_ROOT/deploy.sh"
-          else
-            echo "ERRO: deploy.sh nao encontrado!"
-            exit 1
-          fi
+      - name: Deploy
+        env:
+          APP_SOURCE: ${{ github.workspace }}/source
+        run: bash "${{ github.workspace }}/deploy.sh"
