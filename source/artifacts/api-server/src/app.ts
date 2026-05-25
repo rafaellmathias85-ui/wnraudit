@@ -72,6 +72,10 @@ app.use(cors({ credentials: true, origin: allowedOrigin }));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
+app.get("/api/healthz", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
 app.use(clerkMiddleware());
 
 app.use("/api", router);

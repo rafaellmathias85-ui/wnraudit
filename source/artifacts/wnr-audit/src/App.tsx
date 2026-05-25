@@ -409,12 +409,44 @@ function Router() {
   );
 }
 
+function isValidClerkPublishableKey(value: string | undefined) {
+  return Boolean(
+    value &&
+      !value.includes("...") &&
+      /^pk_(test|live)_[A-Za-z0-9_-]+/.test(value),
+  );
+}
+
+function ClerkConfigurationError() {
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+      <div className="max-w-xl rounded-2xl border border-amber-400/30 bg-slate-900/90 p-8 shadow-2xl shadow-amber-950/30">
+        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-amber-300">
+          Configuracao pendente
+        </p>
+        <h1 className="mt-4 text-3xl font-bold text-white">
+          Clerk nao configurado
+        </h1>
+        <p className="mt-4 text-slate-300">
+          Defina uma chave valida em VITE_CLERK_PUBLISHABLE_KEY e refaca o
+          build do WNR Audit. A chave atual esta vazia ou ainda e o placeholder
+          pk_live_...
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
   const proxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
   const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-  if (!publishableKey) {
+  if (!isValidClerkPublishableKey(publishableKey)) {
+    return <ClerkConfigurationError />;
+  }
+
+  if (!isValidClerkPublishableKey(publishableKey)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-destructive font-medium">
