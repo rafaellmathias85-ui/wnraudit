@@ -17,8 +17,9 @@ jobs:
             cp "$ENV" "$HOME/.wnraudit-env.bak"
           fi
 
-      - name: Remover git locks residuais
+      - name: Limpar workspace (node_modules podem ser de root)
         run: |
+          sudo rm -rf "$GITHUB_WORKSPACE/source/node_modules"
           find "$GITHUB_WORKSPACE" -name "*.lock" -path "*/.git/*" -delete 2>/dev/null || true
 
       - uses: actions/checkout@v4
