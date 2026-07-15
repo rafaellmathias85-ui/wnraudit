@@ -235,7 +235,8 @@ router.post(
       return;
     }
 
-    const { clientId, clientSecret } = parsed.data;
+    const clientId = parsed.data.clientId.trim();
+    const clientSecret = parsed.data.clientSecret.trim();
 
     const [tenant] = await db
       .select()
