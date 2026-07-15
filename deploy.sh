@@ -174,6 +174,7 @@ print(f"Injetando em {len(targets)} bloco(s) server correspondente(s).")
 patterns = [
     r"\n\s*location = /wnraudit/app \{[\s\S]*?\n\s*\}",
     r"\n\s*location \^~ /wnraudit/app/api/ \{[\s\S]*?\n\s*\}",
+    r"\n\s*location \^~ o/wnraudit/app/api/ \{[\s\S]*?\n\s*\}",
     r"\n\s*location \^~ /wnraudit/app/ \{[\s\S]*?\n\s*\}",
     r"\n\s*location = /wnraudit-app-index\.html \{[\s\S]*?\n\s*\}",
 ]
