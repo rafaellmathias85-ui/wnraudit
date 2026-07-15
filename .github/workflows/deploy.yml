@@ -17,10 +17,8 @@ jobs:
             cp "$ENV" "$HOME/.wnraudit-env.bak"
           fi
 
-      - name: Limpar workspace (node_modules podem ser de root)
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE/source/node_modules"
-          find "$GITHUB_WORKSPACE" -name "*.lock" -path "*/.git/*" -delete 2>/dev/null || true
+      - name: Corrigir permissoes do workspace (pnpm store cria arquivos como root)
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
 
       - uses: actions/checkout@v4
         with:
