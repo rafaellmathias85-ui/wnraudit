@@ -131,8 +131,7 @@ export interface OrganizationInfo {
 }
 
 export async function verifyClientCredentialsAccess(microsoftTenantId: string): Promise<OrganizationInfo> {
-  const clientId = getWnrAuditOAuthClientId();
-  const clientSecret = getWnrAuditOAuthClientSecret();
+  const { clientId, clientSecret } = getWnrAuditOAuthCredentials();
 
   const tokenRes = await fetch(
     `${MS_AUTH_BASE}/${encodeURIComponent(microsoftTenantId)}/oauth2/v2.0/token`,
