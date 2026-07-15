@@ -224,4 +224,36 @@ else
   echo "==> Frontend esta servido. Corrija o .env e reinicie: sudo systemctl restart wnraudit-api"
 fi
 
+echo "==> Sincronizando secrets OAuth com app legado..."
+OLD_APP_ENV="/var/www/audit/app/source/.env"
+if [ -f "$OLD_APP_ENV" ]; then
+  NEW_SECRET=$(grep '^MS_OAUTH_CLIENT_SECRET=' "$APP_SOURCE/.env" 2>/dev/null | cut -d= -f2-)
+  if [ -n "$NEW_SECRET" ]; then
+    if sudo grep -q '^MS_OAUTH_CLIENT_SECRET=' "$OLD_APP_ENV"; then
+      sudo sed -i "s|^MS_OAUTH_CLIENT_SECRET=.*|MS_OAUTH_CLIENT_SECRET=${NEW_SECRET}|" "$OLD_APP_ENV"
+    else
+      printf '\nMS_OAUTH_CLIENT_SECRET=%s\n' "$NEW_SECRET" | sudo tee -a "$OLD_APP_ENV" > /dev/null
+    fi
+    echo "==> Secret OAuth sincronizado para app legado."
+    # Reiniciar app legado (porta 3000) para recarregar .env
+    LEGACY_PID=$(sudo lsof -ti:3000 2>/dev/null | head -1)
+    if [ -n "$LEGACY_PID" ]; then
+      # pm2 gerencia reinicio automatico apos kill
+      if command -v pm2 >/dev/null 2>&1 && pm2 list 2>/dev/null | grep -q online; then
+        pm2 restart all --silent 2>/dev/null || true
+        echo "==> App legado reiniciado via pm2."
+      else
+        sudo kill -TERM "$LEGACY_PID" 2>/dev/null || true
+        echo "==> Processo legado (PID $LEGACY_PID) encerrado para reinicio."
+      fi
+    else
+      echo "==> Nenhum processo encontrado na porta 3000."
+    fi
+  else
+    echo "==> MS_OAUTH_CLIENT_SECRET nao encontrado no .env novo — sync ignorado."
+  fi
+else
+  echo "==> App legado nao encontrado em $OLD_APP_ENV — sync ignorado."
+fi
+
 echo "==> Deploy WNR-Audit concluido."

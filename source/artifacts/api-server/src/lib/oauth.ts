@@ -9,16 +9,46 @@ export function getOAuthRedirectUri(): string {
   return "http://localhost:3000/api/oauth/ms/callback";
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve client ID + secret como par atômico: só usa WNR_API_* se AMBOS
+ * estiverem configurados; caso contrário cai para o par MS_OAUTH_*.
+ * Evita enviar o ID de um App Registration com o segredo de outro (AADSTS7000215).
+ */
+export function getWnrAuditOAuthCredentials(): { clientId: string; clientSecret: string } {
+  let clientId: string | undefined;
+  let clientSecret: string | undefined;
+
+  if (process.env.WNR_API_CLIENT_ID && process.env.WNR_API_CLIENT_SECRET) {
+    clientId = process.env.WNR_API_CLIENT_ID;
+    clientSecret = process.env.WNR_API_CLIENT_SECRET;
+  } else if (process.env.MS_OAUTH_CLIENT_ID && process.env.MS_OAUTH_CLIENT_SECRET) {
+    clientId = process.env.MS_OAUTH_CLIENT_ID;
+    clientSecret = process.env.MS_OAUTH_CLIENT_SECRET;
+  }
+
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "Credenciais OAuth incompletas: configure o par WNR_API_CLIENT_ID + WNR_API_CLIENT_SECRET ou MS_OAUTH_CLIENT_ID + MS_OAUTH_CLIENT_SECRET.",
+    );
+  }
+
+  if (UUID_PATTERN.test(clientSecret)) {
+    throw new Error(
+      "O client secret configurado parece ser o 'Secret ID' (GUID) do Azure Portal. Use o campo 'Value' do segredo (Certificates & secrets).",
+    );
+  }
+
+  return { clientId, clientSecret };
+}
+
 export function getWnrAuditOAuthClientId(): string {
-  const id = process.env.WNR_API_CLIENT_ID || process.env.MS_OAUTH_CLIENT_ID;
-  if (!id) throw new Error("WNR_API_CLIENT_ID ou MS_OAUTH_CLIENT_ID não configurado");
-  return id;
+  return getWnrAuditOAuthCredentials().clientId;
 }
 
 export function getWnrAuditOAuthClientSecret(): string {
-  const secret = process.env.WNR_API_CLIENT_SECRET || process.env.MS_OAUTH_CLIENT_SECRET;
-  if (!secret) throw new Error("WNR_API_CLIENT_SECRET ou MS_OAUTH_CLIENT_SECRET não configurado");
-  return secret;
+  return getWnrAuditOAuthCredentials().clientSecret;
 }
 
 export function getOAuthClientSecretForClientId(clientId: string | null | undefined): string {

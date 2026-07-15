@@ -1,0 +1,87 @@
+name: Patch — Legacy App OAuth Secret
+
+on:
+  workflow_dispatch:
+
+jobs:
+  patch:
+    runs-on: self-hosted
+
+    steps:
+      - name: Sync MS_OAUTH_CLIENT_SECRET para app legado
+        run: |
+          # .env do novo app (preservado pelo deploy entre runs)
+          NEW_ENV="$HOME/actions-runner/_work/wnraudit/wnraudit/source/.env"
+          OLD_ENV="/var/www/audit/app/source/.env"
+
+          if [ ! -f "$NEW_ENV" ]; then
+            echo "ERRO: .env novo nao encontrado em $NEW_ENV"
+            exit 1
+          fi
+          if [ ! -f "$OLD_ENV" ]; then
+            echo "ERRO: .env legado nao encontrado em $OLD_ENV"
+            exit 1
+          fi
+
+          NEW_SECRET=$(grep '^MS_OAUTH_CLIENT_SECRET=' "$NEW_ENV" | cut -d= -f2-)
+          if [ -z "$NEW_SECRET" ]; then
+            echo "ERRO: MS_OAUTH_CLIENT_SECRET nao encontrado no .env novo"
+            exit 1
+          fi
+
+          echo "==> Secret encontrado (${#NEW_SECRET} chars). Atualizando app legado..."
+          if sudo grep -q '^MS_OAUTH_CLIENT_SECRET=' "$OLD_ENV"; then
+            sudo sed -i "s|^MS_OAUTH_CLIENT_SECRET=.*|MS_OAUTH_CLIENT_SECRET=${NEW_SECRET}|" "$OLD_ENV"
+          else
+            printf '\nMS_OAUTH_CLIENT_SECRET=%s\n' "$NEW_SECRET" | sudo tee -a "$OLD_ENV" > /dev/null
+          fi
+
+          echo "==> Verificando resultado:"
+          sudo grep 'MS_OAUTH_CLIENT_SECRET' "$OLD_ENV"
+
+      - name: Reiniciar app legado (porta 3000)
+        run: |
+          # Tenta pm2 primeiro
+          if command -v pm2 >/dev/null 2>&1; then
+            ONLINE=$(pm2 list 2>/dev/null | grep -c online || true)
+            if [ "$ONLINE" -gt 0 ]; then
+              pm2 restart all --silent
+              echo "==> Reiniciado via pm2."
+              exit 0
+            fi
+          fi
+
+          # Tenta systemd — nomes comuns para o app legado
+          for SVC in wnraudit-legacy audit-app wnr-audit; do
+            if sudo systemctl is-active --quiet "$SVC" 2>/dev/null; then
+              sudo systemctl restart "$SVC"
+              echo "==> Reiniciado via systemd: $SVC"
+              exit 0
+            fi
+          done
+
+          # Fallback: encerra processo na porta 3000 (pm2/supervisor o reinicia)
+          LEGACY_PID=$(sudo lsof -ti:3000 2>/dev/null | head -1)
+          if [ -n "$LEGACY_PID" ]; then
+            sudo kill -TERM "$LEGACY_PID"
+            sleep 2
+            echo "==> Processo $LEGACY_PID encerrado. Aguardando reinicio..."
+            NEW_PID=$(sudo lsof -ti:3000 2>/dev/null | head -1)
+            if [ -n "$NEW_PID" ]; then
+              echo "==> App legado reiniciado com PID $NEW_PID."
+            else
+              echo "AVISO: Nenhum processo na porta 3000 apos 2s. Reinicio manual pode ser necessario."
+            fi
+          else
+            echo "AVISO: Nenhum processo encontrado na porta 3000."
+          fi
+
+      - name: Verificar saude
+        run: |
+          sleep 3
+          if curl -sf http://127.0.0.1:3000/api/healthz >/dev/null 2>&1; then
+            echo "==> App legado respondeu em /api/healthz."
+          else
+            echo "AVISO: App legado nao respondeu em /api/healthz (pode usar rota diferente)."
+          fi
+          echo "==> Patch concluido."
