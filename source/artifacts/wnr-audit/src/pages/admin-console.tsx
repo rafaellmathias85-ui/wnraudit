@@ -546,6 +546,25 @@ export default function AdminConsole() {
             </Card>
           )}
 
+          {permissionsQuery.isError && (
+            <Card className="border-destructive/50 bg-destructive/5">
+              <CardContent className="p-4 flex gap-3">
+                <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-destructive">Falha ao verificar credenciais do tenant</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {permissionsQuery.error instanceof Error
+                      ? permissionsQuery.error.message
+                      : "Nao foi possivel autenticar no Microsoft Graph. As credenciais armazenadas podem estar expiradas."}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Reconecte o tenant em Configuracoes &gt; Tenants informando o Client ID e o novo segredo.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {permissions && !permissions.ready && (
             <Card className="border-warning/50 bg-warning/5">
               <CardContent className="p-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -632,6 +651,13 @@ export default function AdminConsole() {
                 <CardContent>
                   {usersQuery.isLoading ? (
                     <Skeleton className="h-48 w-full" />
+                  ) : usersQuery.isError ? (
+                    <div className="flex items-center gap-2 text-destructive p-4">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span className="text-sm">
+                        {usersQuery.error instanceof Error ? usersQuery.error.message : "Erro ao carregar usuarios."}
+                      </span>
+                    </div>
                   ) : (
                     <Table>
                       <TableHeader>
@@ -704,6 +730,13 @@ export default function AdminConsole() {
                 <CardContent>
                   {groupsQuery.isLoading ? (
                     <Skeleton className="h-48 w-full" />
+                  ) : groupsQuery.isError ? (
+                    <div className="flex items-center gap-2 text-destructive p-4">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span className="text-sm">
+                        {groupsQuery.error instanceof Error ? groupsQuery.error.message : "Erro ao carregar grupos."}
+                      </span>
+                    </div>
                   ) : (
                     <Table>
                       <TableHeader>
@@ -765,6 +798,13 @@ export default function AdminConsole() {
                 <CardContent>
                   {appsQuery.isLoading ? (
                     <Skeleton className="h-48 w-full" />
+                  ) : appsQuery.isError ? (
+                    <div className="flex items-center gap-2 text-destructive p-4">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span className="text-sm">
+                        {appsQuery.error instanceof Error ? appsQuery.error.message : "Erro ao carregar aplicativos."}
+                      </span>
+                    </div>
                   ) : (
                     <Table>
                       <TableHeader>

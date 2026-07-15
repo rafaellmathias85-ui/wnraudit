@@ -11,6 +11,7 @@ import { requireAuth } from "../middlewares/requireAuth";
 import {
   buildAdminConsentUrl,
   createSignedState,
+  getWnrAuditOAuthClientId,
 } from "../lib/oauth";
 import {
   validateAndConnectWithApp,
@@ -354,8 +355,16 @@ router.post(
       return;
     }
 
-    if (!process.env.MS_OAUTH_CLIENT_ID) {
+    let clientId: string;
+    try {
+      clientId = getWnrAuditOAuthClientId();
+    } catch {
       res.status(503).json({ error: "Integração Microsoft OAuth não configurada. Contate o suporte WNR-Audit." });
+      return;
+    }
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(clientId)) {
+      res.status(503).json({ error: "Client ID Microsoft OAuth inválido (placeholder não substituído). Contate o suporte WNR-Audit." });
       return;
     }
 
