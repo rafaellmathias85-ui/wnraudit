@@ -17,7 +17,13 @@ jobs:
             cp "$ENV" "$HOME/.wnraudit-env.bak"
           fi
 
+      - name: Remover git locks residuais
+        run: |
+          find "$GITHUB_WORKSPACE" -name "*.lock" -path "*/.git/*" -delete 2>/dev/null || true
+
       - uses: actions/checkout@v4
+        with:
+          clean: true
 
       - name: Restaurar .env apos checkout
         run: |
