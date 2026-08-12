@@ -6,10 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Users, Plus, Trash2, Upload } from "lucide-react";
+import { Users, Plus, Trash2, Upload, RefreshCw } from "lucide-react";
 
 type Employee = { id: string; name: string; email: string; department: string | null; createdAt: string };
+type Tenant = { id: string; displayName: string; primaryDomain: string | null; status: string };
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
@@ -30,6 +32,8 @@ export default function PhishingEmployees() {
   const queryClient = useQueryClient();
   const [isNewOpen, setIsNewOpen] = useState(false);
   const [isBulkOpen, setIsBulkOpen] = useState(false);
+  const [isSyncOpen, setIsSyncOpen] = useState(false);
+  const [syncTenantId, setSyncTenantId] = useState("");
   const [form, setForm] = useState({ name: "", email: "", department: "" });
   const [bulkText, setBulkText] = useState("");
   const [search, setSearch] = useState("");
@@ -38,6 +42,12 @@ export default function PhishingEmployees() {
     queryKey: ["phishing-employees"],
     queryFn: () => apiFetch("/phishing/employees"),
   });
+
+  const { data: tenants = [] } = useQuery<Tenant[]>({
+    queryKey: ["tenants"],
+    queryFn: () => apiFetch("/tenants"),
+  });
+  const connectedTenants = tenants.filter((t) => t.status === "connected");
 
   const create = useMutation({
     mutationFn: (data: { name: string; email: string; department?: string }) =>
@@ -61,6 +71,21 @@ export default function PhishingEmployees() {
       toast({ title: `${Array.isArray(data) ? data.length : "?"} funcionários importados` });
     },
     onError: (e: Error) => toast({ variant: "destructive", title: "Erro", description: e.message }),
+  });
+
+  const syncFromTenant = useMutation({
+    mutationFn: (tenantId: string) =>
+      apiFetch<{ inserted: number; skipped: number; total: number }>(
+        `/phishing/employees/sync-from-tenant/${tenantId}`,
+        { method: "POST" },
+      ),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["phishing-employees"] });
+      setIsSyncOpen(false);
+      setSyncTenantId("");
+      toast({ title: `Sincronização concluída`, description: `${data.inserted} novos funcionários importados, ${data.skipped} já existentes.` });
+    },
+    onError: (e: Error) => toast({ variant: "destructive", title: "Erro na sincronização", description: e.message }),
   });
 
   const del = useMutation({
@@ -97,6 +122,50 @@ export default function PhishingEmployees() {
           <p className="text-muted-foreground text-sm mt-1">Gerencie o diretório de funcionários para campanhas de phishing.</p>
         </div>
         <div className="flex gap-2">
+          {/* Importar do Microsoft 365 */}
+          <Dialog open={isSyncOpen} onOpenChange={setIsSyncOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" className="gap-2" disabled={connectedTenants.length === 0}>
+                <RefreshCw className="h-4 w-4" />
+                Importar do M365
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Importar Funcionários do Microsoft 365</DialogTitle>
+              </DialogHeader>
+              <div className="py-4 space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Importa todos os usuários ativos do tenant Microsoft selecionado. Apenas e-mails ainda não cadastrados serão adicionados.
+                </p>
+                <div className="space-y-2">
+                  <Label>Tenant Microsoft</Label>
+                  <Select value={syncTenantId} onValueChange={setSyncTenantId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o tenant..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {connectedTenants.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.displayName}{t.primaryDomain ? ` (${t.primaryDomain})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsSyncOpen(false)}>Cancelar</Button>
+                <Button
+                  onClick={() => syncTenantId && syncFromTenant.mutate(syncTenantId)}
+                  disabled={!syncTenantId || syncFromTenant.isPending}
+                >
+                  {syncFromTenant.isPending ? "Importando..." : "Importar usuários"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           <Dialog open={isBulkOpen} onOpenChange={setIsBulkOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" className="gap-2">

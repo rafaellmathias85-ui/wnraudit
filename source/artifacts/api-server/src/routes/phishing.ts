@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   db,
+  microsoftTenantsTable,
   phishingCampaignsTable,
   phishingTemplatesTable,
   phishingEmployeesTable,
@@ -13,6 +14,8 @@ import {
 import { requireAuth } from "../middlewares/requireAuth";
 import { sendPhishingEmail } from "../lib/phishingMailer";
 import { logger } from "../lib/logger";
+import { decryptSecret } from "../lib/msProvisioner";
+import { getOAuthClientSecretForClientId } from "../lib/oauth";
 
 const router: IRouter = Router();
 
@@ -254,6 +257,123 @@ router.post("/phishing/employees/bulk", requireAuth, async (req, res): Promise<v
     .returning();
   res.status(201).json(rows);
 });
+
+// POST /phishing/employees/sync-from-tenant/:tenantId
+// Importa usuários ativos do Microsoft 365 como funcionários de phishing.
+// Insere apenas e-mails ainda não cadastrados (idempotente).
+router.post(
+  "/phishing/employees/sync-from-tenant/:tenantId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const customer = req.customer!;
+    const { tenantId } = req.params as { tenantId: string };
+
+    const [tenant] = await db
+      .select()
+      .from(microsoftTenantsTable)
+      .where(
+        and(
+          eq(microsoftTenantsTable.id, tenantId),
+          eq(microsoftTenantsTable.customerId, customer.id),
+          eq(microsoftTenantsTable.status, "connected"),
+        ),
+      )
+      .limit(1);
+
+    if (!tenant) {
+      res.status(404).json({ error: "Tenant não encontrado ou não está conectado." });
+      return;
+    }
+
+    // Obter access token usando credenciais armazenadas do tenant
+    const clientSecret = tenant.encryptedClientSecret
+      ? decryptSecret(tenant.encryptedClientSecret)
+      : getOAuthClientSecretForClientId(tenant.provisionedAppId);
+
+    if (!tenant.provisionedAppId || !clientSecret) {
+      res.status(503).json({ error: "Credenciais OAuth do tenant não configuradas." });
+      return;
+    }
+
+    const tokenRes = await fetch(
+      `https://login.microsoftonline.com/${encodeURIComponent(tenant.microsoftTenantId)}/oauth2/v2.0/token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: tenant.provisionedAppId,
+          client_secret: clientSecret,
+          grant_type: "client_credentials",
+          scope: "https://graph.microsoft.com/.default",
+        }),
+      },
+    );
+    const tokenData = (await tokenRes.json()) as Record<string, unknown>;
+    if (!tokenRes.ok) {
+      res.status(502).json({ error: "Falha ao autenticar no Microsoft Graph." });
+      return;
+    }
+    const accessToken = tokenData.access_token as string;
+
+    // Buscar todos os usuários ativos com paginação
+    type GraphUser = { displayName?: string; mail?: string; userPrincipalName?: string; department?: string; accountEnabled?: boolean };
+    const graphUsers: GraphUser[] = [];
+    let nextLink: string | null =
+      "https://graph.microsoft.com/v1.0/users?$select=displayName,mail,userPrincipalName,department,accountEnabled&$top=999&$filter=accountEnabled eq true";
+
+    while (nextLink) {
+      const graphRes = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!graphRes.ok) {
+        res.status(502).json({ error: "Falha ao buscar usuários no Microsoft Graph." });
+        return;
+      }
+      const page = (await graphRes.json()) as { value?: GraphUser[]; "@odata.nextLink"?: string };
+      graphUsers.push(...(page.value ?? []));
+      nextLink = page["@odata.nextLink"] ?? null;
+    }
+
+    // Normalizar: usar mail; fallback para userPrincipalName se não tiver @#EXT# (conta externa)
+    const candidates = graphUsers
+      .map((u) => {
+        const email = u.mail?.trim().toLowerCase() ||
+          (u.userPrincipalName && !u.userPrincipalName.includes("#EXT#")
+            ? u.userPrincipalName.trim().toLowerCase()
+            : null);
+        return email && u.displayName
+          ? { name: u.displayName.trim(), email, department: u.department?.trim() || null }
+          : null;
+      })
+      .filter((u): u is { name: string; email: string; department: string | null } => u !== null);
+
+    if (candidates.length === 0) {
+      res.json({ inserted: 0, skipped: 0, total: 0 });
+      return;
+    }
+
+    // Verificar e-mails já cadastrados para este customer (idempotente)
+    const existing = await db
+      .select({ email: phishingEmployeesTable.email })
+      .from(phishingEmployeesTable)
+      .where(eq(phishingEmployeesTable.customerId, customer.id));
+    const existingEmails = new Set(existing.map((r) => r.email.toLowerCase()));
+
+    const toInsert = candidates.filter((c) => !existingEmails.has(c.email));
+
+    if (toInsert.length > 0) {
+      await db.insert(phishingEmployeesTable).values(
+        toInsert.map((e) => ({ ...e, customerId: customer.id })),
+      );
+    }
+
+    res.json({
+      inserted: toInsert.length,
+      skipped: candidates.length - toInsert.length,
+      total: candidates.length,
+    });
+  },
+);
 
 router.patch("/phishing/employees/:employeeId", requireAuth, async (req, res): Promise<void> => {
   const parsed = z
