@@ -869,6 +869,17 @@ async function recordEvent(
     .limit(1);
   if (!target) return null;
 
+  // Bot/scanner detection: security scanners (Microsoft Safe Links, etc.) fire within
+  // seconds of delivery. Real humans take at minimum a few minutes to open and act.
+  // Ignore open/click events that arrive within 60 s of sentAt.
+  if (target.sentAt && (eventType === "opened" || eventType === "clicked")) {
+    const msSinceSent = Date.now() - new Date(target.sentAt).getTime();
+    if (msSinceSent < 60_000) {
+      logger.info({ token, eventType, msSinceSent }, "Event ignored: automated scanner (within 60s of delivery)");
+      return target;
+    }
+  }
+
   // Only record if not already recorded (idempotent per type)
   const [existing] = await db
     .select({ id: phishingEventsTable.id })
