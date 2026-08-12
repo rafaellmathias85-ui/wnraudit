@@ -855,6 +855,124 @@ router.post(
   },
 );
 
+// ─── Campaign HTML Report ─────────────────────────────────────────────────────
+
+router.get(
+  "/phishing/campaigns/:campaignId/report",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const customer = req.customer!;
+    const campaignId = req.params.campaignId as string;
+
+    const [campaign] = await db
+      .select()
+      .from(phishingCampaignsTable)
+      .where(and(eq(phishingCampaignsTable.id, campaignId), eq(phishingCampaignsTable.customerId, customer.id)))
+      .limit(1);
+    if (!campaign) { res.status(404).send("Campanha não encontrada"); return; }
+
+    const targets = await db
+      .select({
+        id: phishingCampaignTargetsTable.id,
+        employeeName: phishingEmployeesTable.name,
+        employeeEmail: phishingEmployeesTable.email,
+        employeeDepartment: phishingEmployeesTable.department,
+        sentAt: phishingCampaignTargetsTable.sentAt,
+      })
+      .from(phishingCampaignTargetsTable)
+      .innerJoin(phishingEmployeesTable, eq(phishingCampaignTargetsTable.employeeId, phishingEmployeesTable.id))
+      .where(eq(phishingCampaignTargetsTable.campaignId, campaignId));
+
+    const events = await db
+      .select({ targetId: phishingEventsTable.targetId, eventType: phishingEventsTable.eventType })
+      .from(phishingEventsTable)
+      .where(inArray(phishingEventsTable.targetId, targets.map((t) => t.id)));
+
+    const eventsByTarget = new Map<string, Set<string>>();
+    for (const e of events) {
+      if (!eventsByTarget.has(e.targetId)) eventsByTarget.set(e.targetId, new Set());
+      eventsByTarget.get(e.targetId)!.add(e.eventType);
+    }
+
+    const getStatus = (evs: Set<string>) => {
+      if (evs.has("submitted")) return { label: "Submeteu credenciais", badge: "critical", color: "#c62828" };
+      if (evs.has("clicked"))   return { label: "Clicou no link",        badge: "high",     color: "#e65100" };
+      if (evs.has("opened"))    return { label: "Abriu o e-mail",        badge: "medium",   color: "#1565c0" };
+      if (evs.has("reported"))  return { label: "Reportou ao TI",        badge: "good",     color: "#2e7d32" };
+      if (evs.has("sent"))      return { label: "Enviado (não aberto)",  badge: "low",      color: "#555"    };
+      return                           { label: "Aguardando envio",      badge: "none",     color: "#999"    };
+    };
+
+    const total   = targets.length;
+    const sent    = targets.filter((t) => t.sentAt).length;
+    const opened  = targets.filter((t) => eventsByTarget.get(t.id)?.has("opened")).length;
+    const clicked = targets.filter((t) => eventsByTarget.get(t.id)?.has("clicked")).length;
+    const submitted = targets.filter((t) => eventsByTarget.get(t.id)?.has("submitted")).length;
+    const reported  = targets.filter((t) => eventsByTarget.get(t.id)?.has("reported")).length;
+
+    const fmtDate = (d: string | Date | null) =>
+      d ? new Date(d).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+
+    const riskPct = total > 0 ? Math.round(((clicked + submitted) / total) * 100) : 0;
+    const riskLabel = riskPct >= 60 ? "Alto" : riskPct >= 30 ? "Médio" : "Baixo";
+    const riskColor = riskPct >= 60 ? "#c62828" : riskPct >= 30 ? "#e65100" : "#2e7d32";
+
+    const rows = targets.map((t) => {
+      const evs = eventsByTarget.get(t.id) ?? new Set<string>();
+      const s = getStatus(evs);
+      return `<tr><td>${t.employeeName}</td><td>${t.employeeEmail}</td><td>${t.employeeDepartment ?? "—"}</td>
+<td><span style="background:${s.color}18;color:${s.color};padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600">${s.label}</span></td>
+<td>${t.sentAt ? fmtDate(t.sentAt) : "—"}</td></tr>`;
+    }).join("");
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+<title>Relatório — ${campaign.name}</title>
+<style>
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:0;padding:32px 40px;color:#222;background:#fff}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;color:#555;font-weight:normal;margin:0 0 24px}
+.meta{display:flex;gap:24px;font-size:13px;color:#666;margin-bottom:28px;flex-wrap:wrap}
+.meta span b{color:#222}.stats{display:flex;gap:16px;margin-bottom:28px;flex-wrap:wrap}
+.stat{flex:1;min-width:100px;background:#f8f8f8;border-radius:8px;padding:14px 16px;text-align:center}
+.stat .v{font-size:28px;font-weight:bold}.stat .l{font-size:12px;color:#666;margin-top:2px}
+.risk{display:inline-block;padding:6px 18px;border-radius:20px;font-weight:bold;font-size:15px;color:#fff;margin-bottom:28px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#f0f0f0;padding:10px 12px;text-align:left;font-weight:600;border-bottom:2px solid #ddd}
+td{padding:9px 12px;border-bottom:1px solid #eee}
+tr:last-child td{border-bottom:none}tr:hover td{background:#fafafa}
+.footer{margin-top:32px;font-size:11px;color:#aaa;border-top:1px solid #eee;padding-top:12px}
+@media print{body{padding:16px}button{display:none}.no-print{display:none}}
+</style></head><body>
+<div style="display:flex;justify-content:space-between;align-items:flex-start">
+<div><h1>Relatório de Campanha de Phishing Simulado</h1><h2>${campaign.name}</h2></div>
+<button onclick="window.print()" class="no-print" style="padding:8px 20px;background:#1565c0;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🖨️ Imprimir / Salvar PDF</button>
+</div>
+<div class="meta">
+<span><b>Cliente:</b> ${campaign.tenantDisplayName ?? "—"}</span>
+<span><b>Status:</b> ${campaign.status === "completed" ? "Concluída" : campaign.status === "active" ? "Ativa" : "Rascunho"}</span>
+<span><b>Iniciada:</b> ${fmtDate(campaign.startedAt)}</span>
+<span><b>Concluída:</b> ${fmtDate(campaign.completedAt)}</span>
+<span><b>Gerado em:</b> ${fmtDate(new Date())}</span>
+</div>
+<div class="stats">
+<div class="stat"><div class="v">${total}</div><div class="l">Alvos</div></div>
+<div class="stat"><div class="v">${sent}</div><div class="l">Enviados</div></div>
+<div class="stat"><div class="v" style="color:#1565c0">${opened}</div><div class="l">Abriram</div></div>
+<div class="stat"><div class="v" style="color:#e65100">${clicked}</div><div class="l">Clicaram</div></div>
+<div class="stat"><div class="v" style="color:#c62828">${submitted}</div><div class="l">Submeteram cred.</div></div>
+<div class="stat"><div class="v" style="color:#2e7d32">${reported}</div><div class="l">Reportaram</div></div>
+</div>
+<div>
+<span style="font-size:13px;font-weight:600;color:#555">Nível de risco geral:&nbsp;</span>
+<span class="risk" style="background:${riskColor}">${riskLabel} — ${riskPct}% clicaram ou submeteram</span>
+</div>
+<table><thead><tr><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Resultado</th><th>Enviado em</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<div class="footer">WNR Audit — Relatório gerado automaticamente. Confidencial — uso interno.</div>
+</body></html>`);
+  },
+);
+
 // ─── Tracking (public — no auth) ─────────────────────────────────────────────
 
 async function recordEvent(
@@ -928,7 +1046,26 @@ router.get("/phishing/track/:token/click", async (req, res): Promise<void> => {
   res.redirect(302, `${basePath}phishing/training/${token}`);
 });
 
-// Report as phishing (employee action)
+// Report as phishing via email link (GET — opens HTML confirmation page)
+router.get("/phishing/track/:token/report-email", async (req, res): Promise<void> => {
+  const token = req.params.token as string;
+  await recordEvent(token, "reported", { ip: req.ip, ua: req.headers["user-agent"], via: "email-link" }).catch(() => {});
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte registrado</title>
+<style>body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
+.card{background:#fff;border-radius:12px;padding:40px 48px;text-align:center;max-width:480px;box-shadow:0 2px 16px rgba(0,0,0,.1)}
+.icon{font-size:56px;margin-bottom:16px}.title{color:#2e7d32;font-size:22px;font-weight:bold;margin-bottom:12px}
+p{color:#555;line-height:1.6;margin:0}.badge{display:inline-block;background:#e8f5e9;color:#2e7d32;padding:6px 16px;border-radius:20px;font-size:13px;margin-top:20px}</style>
+</head><body><div class="card">
+<div class="icon">✅</div>
+<div class="title">Reporte registrado com sucesso!</div>
+<p>Você identificou corretamente um <strong>e-mail de phishing simulado</strong> e tomou a ação correta reportando-o ao departamento de TI.</p>
+<p style="margin-top:14px">Isso é exatamente o comportamento que esperamos. Parabéns pela atenção à segurança!</p>
+<span class="badge">🛡️ Ação correta registrada</span>
+</div></body></html>`);
+});
+
+// Report as phishing (API — JSON response for frontend use)
 router.post("/phishing/track/:token/report", async (req, res): Promise<void> => {
   const token = req.params.token as string;
   await recordEvent(token, "reported", { ip: req.ip }).catch(() => {});

@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, CheckCircle2, Users, MousePointerClick, Eye, AlertTriangle, Send, ShieldCheck, Plus, Building2, XCircle, Clock } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Users, MousePointerClick, Eye, AlertTriangle, Send, ShieldCheck, Plus, Building2, XCircle, Clock, FileText } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -311,6 +311,16 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
             >
               <CheckCircle2 className="h-4 w-4" />
               Concluir Campanha
+            </Button>
+          )}
+          {(campaign.status === "active" || campaign.status === "completed") && (
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => window.open(`/api/phishing/campaigns/${campaignId}/report`, "_blank")}
+            >
+              <FileText className="h-4 w-4" />
+              Gerar Relatório
             </Button>
           )}
         </div>

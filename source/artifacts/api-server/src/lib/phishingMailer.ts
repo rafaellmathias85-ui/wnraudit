@@ -35,15 +35,25 @@ type PhishingMailOptions = {
 function injectTracking(html: string, token: string, baseUrl: string): string {
   const pixelUrl = `${baseUrl}/api/phishing/track/${token}/open`;
   const clickUrl = `${baseUrl}/api/phishing/track/${token}/click`;
+  const reportUrl = `${baseUrl}/api/phishing/track/${token}/report-email`;
 
-  // Replace placeholder {{TRACKING_PIXEL}} or append
-  let processed = html.replace(/\{\{TRACKING_PIXEL\}\}/g, `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`);
-  if (!html.includes("{{TRACKING_PIXEL}}")) {
-    processed = processed.replace("</body>", `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" /></body>`);
-  }
+  const pixelTag = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`;
+  const reportFooter = `<div style="text-align:center;padding:14px 30px;border-top:1px solid #eee;margin-top:20px"><p style="font-size:11px;color:#aaa;margin:0">Suspeita que este é um e-mail falso? <a href="${reportUrl}" style="color:#aaa;text-decoration:underline">Clique aqui para reportar ao TI</a></p></div>`;
 
-  // Replace {{PHISHING_LINK}} placeholders with tracked link
+  let processed = html;
+
+  // Replace {{PHISHING_LINK}} placeholders
   processed = processed.replace(/\{\{PHISHING_LINK\}\}/g, clickUrl);
+
+  // Replace explicit {{REPORT_LINK}} placeholders if present
+  processed = processed.replace(/\{\{REPORT_LINK\}\}/g, reportUrl);
+
+  // Inject report footer + tracking pixel — replace {{TRACKING_PIXEL}} marker or append
+  if (processed.includes("{{TRACKING_PIXEL}}")) {
+    processed = processed.replace(/\{\{TRACKING_PIXEL\}\}/g, `${reportFooter}${pixelTag}`);
+  } else {
+    processed += `${reportFooter}${pixelTag}`;
+  }
 
   return processed;
 }
