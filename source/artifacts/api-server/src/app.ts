@@ -76,7 +76,12 @@ app.get("/api/healthz", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-app.use(clerkMiddleware());
+// Public phishing tracking routes must bypass Clerk to avoid __clerk_handshake redirect loops
+const PUBLIC_PHISHING_RE = /^\/api\/phishing\/(track|training)\//;
+app.use((req, res, next) => {
+  if (PUBLIC_PHISHING_RE.test(req.path)) return next();
+  return clerkMiddleware()(req, res, next);
+});
 
 app.use("/api", router);
 
