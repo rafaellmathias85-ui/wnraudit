@@ -33,6 +33,16 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 pnpm install --frozen-lockfile
 
+echo "==> Aplicando schema do banco (drizzle-kit push)..."
+DRIZZLE_BIN="$APP_SOURCE/lib/db/node_modules/.bin/drizzle-kit"
+if [ -f "$DRIZZLE_BIN" ]; then
+  DATABASE_URL="$(grep '^DATABASE_URL=' "$APP_SOURCE/.env" | cut -d= -f2-)" \
+    "$DRIZZLE_BIN" push --config "$APP_SOURCE/lib/db/drizzle.config.ts" --force 2>&1 \
+    | grep -v "^\[" | grep -v "^$" || true
+else
+  echo "AVISO: drizzle-kit nao encontrado em $DRIZZLE_BIN — schema nao aplicado."
+fi
+
 echo "==> Build de producao..."
 NODE_ENV=production pnpm -r --if-present run build
 
