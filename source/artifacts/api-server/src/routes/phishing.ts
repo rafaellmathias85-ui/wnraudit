@@ -705,6 +705,12 @@ router.post(
   requireAuth,
   async (req, res): Promise<void> => {
     const customer = req.customer!;
+
+    const bodyParsed = z
+      .object({ templateId: z.string().optional() })
+      .safeParse(req.body);
+    const campaignTemplateId = bodyParsed.data?.templateId;
+
     const [campaign] = await db
       .select()
       .from(phishingCampaignsTable)
@@ -722,6 +728,27 @@ router.post(
     if (campaign.status === "active") {
       res.status(409).json({ error: "Campanha já está ativa" });
       return;
+    }
+
+    // Pre-resolve campaign-level template (fallback for targets without their own)
+    let fallbackTemplate: { subject: string; htmlBody: string } | null = null;
+    if (campaignTemplateId) {
+      if (campaignTemplateId.startsWith("builtin-")) {
+        const idx = parseInt(campaignTemplateId.replace("builtin-", ""), 10);
+        fallbackTemplate = BUILTIN_TEMPLATES[idx] ?? null;
+      } else {
+        const [tmpl] = await db
+          .select({ subject: phishingTemplatesTable.subject, htmlBody: phishingTemplatesTable.htmlBody })
+          .from(phishingTemplatesTable)
+          .where(
+            and(
+              eq(phishingTemplatesTable.id, campaignTemplateId),
+              eq(phishingTemplatesTable.customerId, customer.id),
+            ),
+          )
+          .limit(1);
+        fallbackTemplate = tmpl ?? null;
+      }
     }
 
     const targets = await db
@@ -765,15 +792,23 @@ router.post(
       for (const target of targets) {
         if (target.sentAt) continue; // already sent
         try {
+          // Per-target template takes precedence; fall back to campaign-level; then generic
+          const subject =
+            target.templateSubject ??
+            fallbackTemplate?.subject ??
+            `[Teste de Segurança] Ação necessária`;
+          const htmlBody =
+            target.templateHtml ??
+            fallbackTemplate?.htmlBody ??
+            `<p>Clique aqui: <a href="{{PHISHING_LINK}}">Link</a></p>{{TRACKING_PIXEL}}`;
+
           await sendPhishingEmail({
             to: target.employeeEmail,
             toName: target.employeeName,
             fromName: campaign.senderName,
             fromEmail: campaign.senderEmail,
-            subject: target.templateSubject ?? `[Teste de Segurança] Ação necessária`,
-            htmlBody:
-              target.templateHtml ??
-              `<p>Clique aqui: <a href="{{PHISHING_LINK}}">Link</a></p>{{TRACKING_PIXEL}}`,
+            subject,
+            htmlBody,
             trackingToken: target.trackingToken,
             trackingBaseUrl,
           });

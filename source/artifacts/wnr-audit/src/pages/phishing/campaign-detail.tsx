@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Play, CheckCircle2, Users, MousePointerClick, Eye, AlertTriangle, Send, ShieldCheck, Plus, Building2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Users, MousePointerClick, Eye, AlertTriangle, Send, ShieldCheck, Plus, Building2, XCircle, Clock } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -56,20 +58,25 @@ type Employee = {
   department: string | null;
   tenantId: string | null;
 };
+type Template = { id: string; name: string; subject: string };
 
-const EVENT_CONFIG: Record<string, { label: string; color: string }> = {
-  sent: { label: "Enviado", color: "text-muted-foreground" },
-  opened: { label: "Aberto", color: "text-blue-600" },
-  clicked: { label: "Clicou", color: "text-orange-600" },
-  submitted: { label: "Submeteu credenciais", color: "text-destructive" },
-  reported: { label: "Reportou como suspeito", color: "text-success" },
+const EVENT_CONFIG: Record<string, { label: string; color: string; Icon: React.ElementType }> = {
+  sent:      { label: "Enviado",               color: "text-muted-foreground", Icon: Send },
+  opened:    { label: "Abriu o e-mail",         color: "text-blue-600",        Icon: Eye },
+  clicked:   { label: "Clicou no link",         color: "text-orange-600",      Icon: MousePointerClick },
+  submitted: { label: "Submeteu credenciais",   color: "text-destructive",     Icon: AlertTriangle },
+  reported:  { label: "Reportou como suspeito", color: "text-green-600",       Icon: ShieldCheck },
+  pending:   { label: "Aguardando envio",       color: "text-muted-foreground", Icon: Clock },
+  failed:    { label: "Falha no envio",         color: "text-destructive",     Icon: XCircle },
 };
 
-function getWorstEvent(events: Event[]): string {
+function getTargetStatus(target: Target, campaignStatus: string): string {
   const order = ["submitted", "clicked", "opened", "reported", "sent"];
   for (const e of order) {
-    if (events.some((ev) => ev.eventType === e)) return e;
+    if (target.events.some((ev) => ev.eventType === e)) return e;
   }
+  // Campaign active/completed but email never sent → failure
+  if (campaignStatus !== "draft" && !target.sentAt) return "failed";
   return "pending";
 }
 
@@ -78,6 +85,8 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
   const queryClient = useQueryClient();
   const [isAddTargetsOpen, setIsAddTargetsOpen] = useState(false);
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
+  const [isDispatchOpen, setIsDispatchOpen] = useState(false);
+  const [dispatchTemplateId, setDispatchTemplateId] = useState<string>("");
 
   const { data: campaign, isLoading } = useQuery<Campaign>({
     queryKey: ["phishing-campaign", campaignId],
@@ -90,13 +99,24 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
     enabled: isAddTargetsOpen,
   });
 
+  const { data: templates = [] } = useQuery<Template[]>({
+    queryKey: ["phishing-templates"],
+    queryFn: () => apiFetch("/phishing/templates"),
+    enabled: isDispatchOpen,
+  });
+
   const dispatch = useMutation({
-    mutationFn: () => apiFetch(`/phishing/campaigns/${campaignId}/dispatch`, { method: "POST" }),
+    mutationFn: (templateId: string) =>
+      apiFetch(`/phishing/campaigns/${campaignId}/dispatch`, {
+        method: "POST",
+        body: JSON.stringify({ templateId: templateId || undefined }),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["phishing-campaign", campaignId] });
+      setIsDispatchOpen(false);
       toast({ title: "Campanha disparada", description: "E-mails sendo enviados em segundo plano." });
     },
-    onError: (e: Error) => toast({ variant: "destructive", title: "Erro", description: e.message }),
+    onError: (e: Error) => toast({ variant: "destructive", title: "Erro ao disparar", description: e.message }),
   });
 
   const complete = useMutation({
@@ -173,6 +193,7 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
         <div className="flex gap-2">
           {campaign.status === "draft" && (
             <>
+              {/* Add targets dialog */}
               <Dialog open={isAddTargetsOpen} onOpenChange={setIsAddTargetsOpen}>
                 <DialogTrigger asChild>
                   <Button variant="outline" className="gap-2">
@@ -226,14 +247,57 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
-              <Button
-                className="gap-2"
-                onClick={() => dispatch.mutate()}
-                disabled={dispatch.isPending || targets.length === 0}
-              >
-                <Send className="h-4 w-4" />
-                {dispatch.isPending ? "Disparando..." : "Disparar Campanha"}
-              </Button>
+
+              {/* Dispatch dialog — choose template before sending */}
+              <Dialog open={isDispatchOpen} onOpenChange={(open) => { setIsDispatchOpen(open); if (open) setDispatchTemplateId(""); }}>
+                <DialogTrigger asChild>
+                  <Button className="gap-2" disabled={targets.length === 0}>
+                    <Send className="h-4 w-4" />
+                    Disparar Campanha
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Confirmar Disparo</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4 py-2">
+                    <p className="text-sm text-muted-foreground">
+                      Serão enviados e-mails de phishing simulado para{" "}
+                      <strong>{targets.length} alvo(s)</strong>. Escolha o template antes de disparar.
+                    </p>
+                    <div className="space-y-2">
+                      <Label>Template de e-mail</Label>
+                      <Select value={dispatchTemplateId} onValueChange={setDispatchTemplateId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione um template…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {templates.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                              {t.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {dispatchTemplateId && (
+                        <p className="text-xs text-muted-foreground">
+                          Assunto: <em>{templates.find((t) => t.id === dispatchTemplateId)?.subject}</em>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setIsDispatchOpen(false)}>Cancelar</Button>
+                    <Button
+                      onClick={() => dispatch.mutate(dispatchTemplateId)}
+                      disabled={!dispatchTemplateId || dispatch.isPending}
+                    >
+                      <Send className="h-4 w-4 mr-2" />
+                      {dispatch.isPending ? "Disparando…" : "Disparar"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </>
           )}
           {campaign.status === "active" && (
@@ -285,21 +349,28 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
           ) : (
             <div className="divide-y">
               {targets.map((t) => {
-                const worst = getWorstEvent(t.events);
-                const cfg = EVENT_CONFIG[worst] ?? { label: "Pendente", color: "text-muted-foreground" };
+                const status = getTargetStatus(t, campaign.status);
+                const cfg = EVENT_CONFIG[status] ?? EVENT_CONFIG.pending;
                 return (
                   <div key={t.id} className="flex items-center justify-between px-6 py-3 hover:bg-muted/30">
                     <div>
                       <div className="text-sm font-medium">{t.employeeName}</div>
-                      <div className="text-xs text-muted-foreground">{t.employeeEmail}{t.employeeDepartment ? ` · ${t.employeeDepartment}` : ""}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {t.employeeEmail}{t.employeeDepartment ? ` · ${t.employeeDepartment}` : ""}
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className={`text-sm font-medium ${cfg.color}`}>{cfg.label}</div>
-                      {t.sentAt && (
+                    <div className="text-right flex flex-col items-end gap-0.5">
+                      <div className={`flex items-center gap-1 text-sm font-medium ${cfg.color}`}>
+                        <cfg.Icon className="h-3.5 w-3.5" />
+                        {cfg.label}
+                      </div>
+                      {t.sentAt ? (
                         <div className="text-xs text-muted-foreground">
-                          {format(new Date(t.sentAt), "dd/MM HH:mm", { locale: ptBR })}
+                          Enviado em {format(new Date(t.sentAt), "dd/MM HH:mm", { locale: ptBR })}
                         </div>
-                      )}
+                      ) : status === "failed" ? (
+                        <div className="text-xs text-destructive/70">SMTP não configurado</div>
+                      ) : null}
                     </div>
                   </div>
                 );
