@@ -317,7 +317,15 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
             <Button
               variant="outline"
               className="gap-2"
-              onClick={() => window.open(`/api/phishing/campaigns/${campaignId}/report`, "_blank")}
+              onClick={async () => {
+                const res = await fetch(`/api/phishing/campaigns/${campaignId}/report`, { credentials: "include" });
+                if (!res.ok) { toast({ variant: "destructive", title: "Erro ao gerar relatório" }); return; }
+                const html = await res.text();
+                const win = window.open("", "_blank");
+                win?.document.open();
+                win?.document.write(html);
+                win?.document.close();
+              }}
             >
               <FileText className="h-4 w-4" />
               Gerar Relatório
