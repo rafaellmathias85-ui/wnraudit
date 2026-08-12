@@ -822,6 +822,7 @@ router.post(
           });
         } catch (err) {
           logger.error({ err, targetId: target.id }, "Failed to send phishing email");
+          await db.insert(phishingEventsTable).values({ targetId: target.id, eventType: "failed" }).catch(() => {});
         }
       }
     })().catch((err) => logger.error({ err }, "Dispatch loop failed"));

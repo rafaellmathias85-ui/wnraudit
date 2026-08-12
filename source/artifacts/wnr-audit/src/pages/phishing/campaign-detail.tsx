@@ -70,13 +70,11 @@ const EVENT_CONFIG: Record<string, { label: string; color: string; Icon: React.E
   failed:    { label: "Falha no envio",         color: "text-destructive",     Icon: XCircle },
 };
 
-function getTargetStatus(target: Target, campaignStatus: string): string {
-  const order = ["submitted", "clicked", "opened", "reported", "sent"];
+function getTargetStatus(target: Target): string {
+  const order = ["submitted", "clicked", "opened", "reported", "sent", "failed"];
   for (const e of order) {
     if (target.events.some((ev) => ev.eventType === e)) return e;
   }
-  // Campaign active/completed but email never sent → failure
-  if (campaignStatus !== "draft" && !target.sentAt) return "failed";
   return "pending";
 }
 
@@ -353,7 +351,7 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
           ) : (
             <div className="divide-y">
               {targets.map((t) => {
-                const status = getTargetStatus(t, campaign.status);
+                const status = getTargetStatus(t);
                 const cfg = EVENT_CONFIG[status] ?? EVENT_CONFIG.pending;
                 return (
                   <div key={t.id} className="flex items-center justify-between px-6 py-3 hover:bg-muted/30">
@@ -368,13 +366,11 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
                         <cfg.Icon className="h-3.5 w-3.5" />
                         {cfg.label}
                       </div>
-                      {t.sentAt ? (
+                      {t.sentAt && (
                         <div className="text-xs text-muted-foreground">
                           Enviado em {format(new Date(t.sentAt), "dd/MM HH:mm", { locale: ptBR })}
                         </div>
-                      ) : status === "failed" ? (
-                        <div className="text-xs text-destructive/70">SMTP não configurado</div>
-                      ) : null}
+                      )}
                     </div>
                   </div>
                 );
