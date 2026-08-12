@@ -115,6 +115,10 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
       queryClient.invalidateQueries({ queryKey: ["phishing-campaign", campaignId] });
       setIsDispatchOpen(false);
       toast({ title: "Campanha disparada", description: "E-mails sendo enviados em segundo plano." });
+      // Refresh after background sending completes (~10s)
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["phishing-campaign", campaignId] });
+      }, 10_000);
     },
     onError: (e: Error) => toast({ variant: "destructive", title: "Erro ao disparar", description: e.message }),
   });
