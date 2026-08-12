@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,8 +9,9 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Mail, Users, MousePointerClick, ChevronRight, Play, CheckCircle2, Pause, FileText } from "lucide-react";
+import { Plus, Mail, Users, MousePointerClick, ChevronRight, Play, CheckCircle2, FileText, Building2 } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -21,12 +22,16 @@ type Campaign = {
   status: "draft" | "active" | "completed" | "paused";
   senderName: string;
   senderEmail: string;
+  tenantId: string | null;
+  tenantDisplayName: string | null;
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
   targetCount: number;
   clickCount: number;
 };
+
+type Tenant = { id: string; displayName: string; primaryDomain: string | null; status: string };
 
 const STATUS_CONFIG = {
   draft: { label: "Rascunho", variant: "secondary" as const },
@@ -59,6 +64,7 @@ export default function PhishingCampaigns() {
     senderName: "Suporte TI",
     senderEmail: "",
     authorizationNote: "",
+    tenantId: "",
   });
 
   const { data: campaigns = [], isLoading } = useQuery<Campaign[]>({
@@ -66,12 +72,22 @@ export default function PhishingCampaigns() {
     queryFn: () => apiFetch("/phishing/campaigns"),
   });
 
+  const { data: tenants = [] } = useQuery<Tenant[]>({
+    queryKey: ["tenants"],
+    queryFn: () => apiFetch("/tenants"),
+  });
+  const connectedTenants = tenants.filter((t) => t.status === "connected");
+
   const createCampaign = useMutation({
-    mutationFn: (data: typeof form) => apiFetch("/phishing/campaigns", { method: "POST", body: JSON.stringify(data) }),
+    mutationFn: (data: typeof form) =>
+      apiFetch("/phishing/campaigns", {
+        method: "POST",
+        body: JSON.stringify({ ...data, tenantId: data.tenantId || null }),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["phishing-campaigns"] });
       setIsNewOpen(false);
-      setForm({ name: "", description: "", senderName: "Suporte TI", senderEmail: "", authorizationNote: "" });
+      setForm({ name: "", description: "", senderName: "Suporte TI", senderEmail: "", authorizationNote: "", tenantId: "" });
       toast({ title: "Campanha criada", description: "A campanha foi criada em modo rascunho." });
     },
     onError: (e: Error) => toast({ variant: "destructive", title: "Erro", description: e.message }),
@@ -115,6 +131,23 @@ export default function PhishingCampaigns() {
                 <DialogTitle>Nova Campanha de Phishing</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label>Cliente (tenant Microsoft)</Label>
+                  <Select value={form.tenantId} onValueChange={(v) => setForm((f) => ({ ...f, tenantId: v === "none" ? "" : v }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o cliente..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Sem cliente específico</SelectItem>
+                      {connectedTenants.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.displayName}{t.primaryDomain ? ` (${t.primaryDomain})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Associar a um cliente filtra os funcionários disponíveis para essa campanha.</p>
+                </div>
                 <div className="space-y-2">
                   <Label>Nome da campanha *</Label>
                   <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Ex: Teste Q2 2025 — Microsoft 365" />
@@ -164,7 +197,7 @@ export default function PhishingCampaigns() {
         </div>
       ) : campaigns.length === 0 ? (
         <Card>
-          <CardContent className="py-16 text-center">
+          <div className="py-16 text-center">
             <Mail className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
             <h3 className="font-semibold text-lg">Nenhuma campanha ainda</h3>
             <p className="text-muted-foreground text-sm mt-1 max-w-sm mx-auto">
@@ -174,7 +207,7 @@ export default function PhishingCampaigns() {
               <Plus className="h-4 w-4" />
               Nova Campanha
             </Button>
-          </CardContent>
+          </div>
         </Card>
       ) : (
         <div className="space-y-3">
@@ -189,6 +222,12 @@ export default function PhishingCampaigns() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold">{c.name}</span>
                         <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                        {c.tenantDisplayName && (
+                          <Badge variant="outline" className="gap-1 text-xs">
+                            <Building2 className="h-3 w-3" />
+                            {c.tenantDisplayName}
+                          </Badge>
+                        )}
                       </div>
                       {c.description && <p className="text-sm text-muted-foreground truncate mt-0.5">{c.description}</p>}
                       <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">

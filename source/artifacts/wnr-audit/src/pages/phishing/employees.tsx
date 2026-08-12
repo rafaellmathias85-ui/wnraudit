@@ -5,12 +5,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Users, Plus, Trash2, Upload, RefreshCw } from "lucide-react";
 
-type Employee = { id: string; name: string; email: string; department: string | null; createdAt: string };
+type Employee = {
+  id: string;
+  name: string;
+  email: string;
+  department: string | null;
+  tenantId: string | null;
+  tenantDisplayName: string | null;
+  createdAt: string;
+};
 type Tenant = { id: string; displayName: string; primaryDomain: string | null; status: string };
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -37,6 +46,7 @@ export default function PhishingEmployees() {
   const [form, setForm] = useState({ name: "", email: "", department: "" });
   const [bulkText, setBulkText] = useState("");
   const [search, setSearch] = useState("");
+  const [filterTenantId, setFilterTenantId] = useState("all");
 
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
     queryKey: ["phishing-employees"],
@@ -48,6 +58,15 @@ export default function PhishingEmployees() {
     queryFn: () => apiFetch("/tenants"),
   });
   const connectedTenants = tenants.filter((t) => t.status === "connected");
+
+  // Unique tenants present in the employee list (for filter dropdown)
+  const employeeTenants = Array.from(
+    new Map(
+      employees
+        .filter((e) => e.tenantId && e.tenantDisplayName)
+        .map((e) => [e.tenantId!, { id: e.tenantId!, displayName: e.tenantDisplayName! }]),
+    ).values(),
+  );
 
   const create = useMutation({
     mutationFn: (data: { name: string; email: string; department?: string }) =>
@@ -100,19 +119,22 @@ export default function PhishingEmployees() {
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => {
-        // Format: Nome;email@ex.com;Departamento (semicolon or comma)
         const parts = line.split(/[;,]/).map((p) => p.trim());
         return { name: parts[0] ?? "", email: parts[1] ?? "", department: parts[2] ?? undefined };
       })
       .filter((e) => e.name && e.email);
   }
 
-  const filtered = employees.filter(
-    (e) =>
+  const filtered = employees.filter((e) => {
+    const matchesSearch =
       e.name.toLowerCase().includes(search.toLowerCase()) ||
       e.email.toLowerCase().includes(search.toLowerCase()) ||
-      (e.department ?? "").toLowerCase().includes(search.toLowerCase()),
-  );
+      (e.department ?? "").toLowerCase().includes(search.toLowerCase());
+    const matchesTenant =
+      filterTenantId === "all" ||
+      (filterTenantId === "none" ? !e.tenantId : e.tenantId === filterTenantId);
+    return matchesSearch && matchesTenant;
+  });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -125,7 +147,7 @@ export default function PhishingEmployees() {
           {/* Importar do Microsoft 365 */}
           <Dialog open={isSyncOpen} onOpenChange={setIsSyncOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="gap-2" disabled={connectedTenants.length === 0}>
+              <Button variant="outline" className="gap-2" disabled={connectedTenants.length === 0} title={connectedTenants.length === 0 ? "Nenhum tenant Microsoft conectado" : undefined}>
                 <RefreshCw className="h-4 w-4" />
                 Importar do M365
               </Button>
@@ -139,10 +161,10 @@ export default function PhishingEmployees() {
                   Importa todos os usuários ativos do tenant Microsoft selecionado. Apenas e-mails ainda não cadastrados serão adicionados.
                 </p>
                 <div className="space-y-2">
-                  <Label>Tenant Microsoft</Label>
+                  <Label>Tenant Microsoft (cliente)</Label>
                   <Select value={syncTenantId} onValueChange={setSyncTenantId}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Selecione o tenant..." />
+                      <SelectValue placeholder="Selecione o cliente..." />
                     </SelectTrigger>
                     <SelectContent>
                       {connectedTenants.map((t) => (
@@ -221,7 +243,28 @@ export default function PhishingEmployees() {
         </div>
       </div>
 
-      <Input placeholder="Buscar por nome, e-mail ou departamento..." value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-sm" />
+      <div className="flex gap-3 flex-wrap">
+        <Input
+          placeholder="Buscar por nome, e-mail ou departamento..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="max-w-sm"
+        />
+        {employeeTenants.length > 0 && (
+          <Select value={filterTenantId} onValueChange={setFilterTenantId}>
+            <SelectTrigger className="w-52">
+              <SelectValue placeholder="Filtrar por cliente..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os clientes</SelectItem>
+              <SelectItem value="none">Sem cliente</SelectItem>
+              {employeeTenants.map((t) => (
+                <SelectItem key={t.id} value={t.id}>{t.displayName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
 
       {isLoading ? (
         <div className="space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-14 w-full" />)}</div>
@@ -242,11 +285,16 @@ export default function PhishingEmployees() {
               <div className="divide-y">
                 {filtered.map((e) => (
                   <div key={e.id} className="flex items-center justify-between px-6 py-3 hover:bg-muted/30">
-                    <div>
-                      <div className="text-sm font-medium">{e.name}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium">{e.name}</span>
+                        {e.tenantDisplayName && (
+                          <Badge variant="secondary" className="text-xs">{e.tenantDisplayName}</Badge>
+                        )}
+                      </div>
                       <div className="text-xs text-muted-foreground">{e.email}{e.department ? ` · ${e.department}` : ""}</div>
                     </div>
-                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" onClick={() => del.mutate(e.id)}>
+                    <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive shrink-0" onClick={() => del.mutate(e.id)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>

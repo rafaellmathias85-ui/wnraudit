@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Play, CheckCircle2, Users, MousePointerClick, Eye, AlertTriangle, Send, ShieldCheck, Plus } from "lucide-react";
+import { ArrowLeft, Play, CheckCircle2, Users, MousePointerClick, Eye, AlertTriangle, Send, ShieldCheck, Plus, Building2 } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -28,6 +28,7 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
 type Event = { id: string; eventType: string; occurredAt: string };
 type Target = {
   id: string;
+  employeeId: string;
   employeeName: string;
   employeeEmail: string;
   employeeDepartment: string | null;
@@ -41,12 +42,20 @@ type Campaign = {
   status: string;
   senderName: string;
   senderEmail: string;
+  tenantId: string | null;
+  tenantDisplayName: string | null;
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
   targets: Target[];
 };
-type Employee = { id: string; name: string; email: string; department: string | null };
+type Employee = {
+  id: string;
+  name: string;
+  email: string;
+  department: string | null;
+  tenantId: string | null;
+};
 
 const EVENT_CONFIG: Record<string, { label: string; color: string }> = {
   sent: { label: "Enviado", color: "text-muted-foreground" },
@@ -133,8 +142,13 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
   const submittedCount = targets.filter((t) => t.events.some((e) => e.eventType === "submitted")).length;
   const reportedCount = targets.filter((t) => t.events.some((e) => e.eventType === "reported")).length;
 
-  const existingEmployeeIds = new Set(targets.map((t: any) => t.employeeId));
-  const availableEmployees = employees.filter((e) => !existingEmployeeIds.has(e.id));
+  const existingEmployeeIds = new Set(targets.map((t) => t.employeeId));
+  const availableEmployees = employees.filter((e) => {
+    if (existingEmployeeIds.has(e.id)) return false;
+    // If campaign is scoped to a tenant, only show employees from that tenant (or unscoped employees)
+    if (campaign.tenantId && e.tenantId && e.tenantId !== campaign.tenantId) return false;
+    return true;
+  });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -145,7 +159,15 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
           </Button>
         </Link>
         <div className="flex-1">
-          <h1 className="text-2xl font-display font-bold">{campaign.name}</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl font-display font-bold">{campaign.name}</h1>
+            {campaign.tenantDisplayName && (
+              <Badge variant="outline" className="gap-1">
+                <Building2 className="h-3 w-3" />
+                {campaign.tenantDisplayName}
+              </Badge>
+            )}
+          </div>
           {campaign.description && <p className="text-muted-foreground text-sm">{campaign.description}</p>}
         </div>
         <div className="flex gap-2">
@@ -159,7 +181,14 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="max-w-md">
-                  <DialogHeader><DialogTitle>Selecionar Funcionários</DialogTitle></DialogHeader>
+                  <DialogHeader>
+                    <DialogTitle>Selecionar Funcionários</DialogTitle>
+                  </DialogHeader>
+                  {campaign.tenantDisplayName && (
+                    <p className="text-xs text-muted-foreground px-1">
+                      Mostrando funcionários de <strong>{campaign.tenantDisplayName}</strong> e sem cliente associado.
+                    </p>
+                  )}
                   <div className="max-h-72 overflow-y-auto space-y-2 py-4">
                     {availableEmployees.length === 0 ? (
                       <p className="text-muted-foreground text-sm text-center py-6">

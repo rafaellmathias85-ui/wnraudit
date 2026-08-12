@@ -207,8 +207,19 @@ router.delete("/phishing/templates/:templateId", requireAuth, async (req, res): 
 router.get("/phishing/employees", requireAuth, async (req, res): Promise<void> => {
   const customer = req.customer!;
   const rows = await db
-    .select()
+    .select({
+      id: phishingEmployeesTable.id,
+      customerId: phishingEmployeesTable.customerId,
+      tenantId: phishingEmployeesTable.tenantId,
+      tenantDisplayName: microsoftTenantsTable.displayName,
+      name: phishingEmployeesTable.name,
+      email: phishingEmployeesTable.email,
+      department: phishingEmployeesTable.department,
+      createdAt: phishingEmployeesTable.createdAt,
+      updatedAt: phishingEmployeesTable.updatedAt,
+    })
     .from(phishingEmployeesTable)
+    .leftJoin(microsoftTenantsTable, eq(phishingEmployeesTable.tenantId, microsoftTenantsTable.id))
     .where(eq(phishingEmployeesTable.customerId, customer.id))
     .orderBy(phishingEmployeesTable.name);
   res.json(rows);
@@ -363,7 +374,7 @@ router.post(
 
     if (toInsert.length > 0) {
       await db.insert(phishingEmployeesTable).values(
-        toInsert.map((e) => ({ ...e, customerId: customer.id })),
+        toInsert.map((e) => ({ ...e, customerId: customer.id, tenantId })),
       );
     }
 
@@ -428,8 +439,24 @@ router.delete("/phishing/employees/:employeeId", requireAuth, async (req, res): 
 router.get("/phishing/campaigns", requireAuth, async (req, res): Promise<void> => {
   const customer = req.customer!;
   const campaigns = await db
-    .select()
+    .select({
+      id: phishingCampaignsTable.id,
+      customerId: phishingCampaignsTable.customerId,
+      tenantId: phishingCampaignsTable.tenantId,
+      tenantDisplayName: microsoftTenantsTable.displayName,
+      name: phishingCampaignsTable.name,
+      description: phishingCampaignsTable.description,
+      status: phishingCampaignsTable.status,
+      senderName: phishingCampaignsTable.senderName,
+      senderEmail: phishingCampaignsTable.senderEmail,
+      authorizationNote: phishingCampaignsTable.authorizationNote,
+      startedAt: phishingCampaignsTable.startedAt,
+      completedAt: phishingCampaignsTable.completedAt,
+      createdAt: phishingCampaignsTable.createdAt,
+      updatedAt: phishingCampaignsTable.updatedAt,
+    })
     .from(phishingCampaignsTable)
+    .leftJoin(microsoftTenantsTable, eq(phishingCampaignsTable.tenantId, microsoftTenantsTable.id))
     .where(eq(phishingCampaignsTable.customerId, customer.id))
     .orderBy(desc(phishingCampaignsTable.createdAt));
 
@@ -468,6 +495,7 @@ router.post("/phishing/campaigns", requireAuth, async (req, res): Promise<void> 
       senderName: z.string().min(1).default("Suporte TI"),
       senderEmail: z.string().email(),
       authorizationNote: z.string().min(10, "Nota de autorização deve ter ao menos 10 caracteres"),
+      tenantId: z.string().uuid().optional().nullable(),
     })
     .safeParse(req.body);
   if (!parsed.success) {
@@ -475,6 +503,22 @@ router.post("/phishing/campaigns", requireAuth, async (req, res): Promise<void> 
     return;
   }
   const customer = req.customer!;
+  if (parsed.data.tenantId) {
+    const [tenant] = await db
+      .select({ id: microsoftTenantsTable.id })
+      .from(microsoftTenantsTable)
+      .where(
+        and(
+          eq(microsoftTenantsTable.id, parsed.data.tenantId),
+          eq(microsoftTenantsTable.customerId, customer.id),
+        ),
+      )
+      .limit(1);
+    if (!tenant) {
+      res.status(400).json({ error: "Tenant não encontrado" });
+      return;
+    }
+  }
   const [created] = await db
     .insert(phishingCampaignsTable)
     .values({ ...parsed.data, customerId: customer.id, status: "draft" })
@@ -486,8 +530,24 @@ router.get("/phishing/campaigns/:campaignId", requireAuth, async (req, res): Pro
   const customer = req.customer!;
   const campaignId = req.params.campaignId as string;
   const [campaign] = await db
-    .select()
+    .select({
+      id: phishingCampaignsTable.id,
+      customerId: phishingCampaignsTable.customerId,
+      tenantId: phishingCampaignsTable.tenantId,
+      tenantDisplayName: microsoftTenantsTable.displayName,
+      name: phishingCampaignsTable.name,
+      description: phishingCampaignsTable.description,
+      status: phishingCampaignsTable.status,
+      senderName: phishingCampaignsTable.senderName,
+      senderEmail: phishingCampaignsTable.senderEmail,
+      authorizationNote: phishingCampaignsTable.authorizationNote,
+      startedAt: phishingCampaignsTable.startedAt,
+      completedAt: phishingCampaignsTable.completedAt,
+      createdAt: phishingCampaignsTable.createdAt,
+      updatedAt: phishingCampaignsTable.updatedAt,
+    })
     .from(phishingCampaignsTable)
+    .leftJoin(microsoftTenantsTable, eq(phishingCampaignsTable.tenantId, microsoftTenantsTable.id))
     .where(
       and(
         eq(phishingCampaignsTable.id, campaignId),

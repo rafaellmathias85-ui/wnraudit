@@ -8,6 +8,7 @@ import {
   boolean,
 } from "drizzle-orm/pg-core";
 import { customersTable } from "./customers";
+import { microsoftTenantsTable } from "./tenants";
 
 export const phishingCampaignStatusEnum = pgEnum("phishing_campaign_status", [
   "draft",
@@ -29,6 +30,7 @@ export const phishingCampaignsTable = pgTable("phishing_campaigns", {
   customerId: uuid("customer_id")
     .notNull()
     .references(() => customersTable.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").references(() => microsoftTenantsTable.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   description: text("description"),
   status: phishingCampaignStatusEnum("status").notNull().default("draft"),
@@ -60,6 +62,7 @@ export const phishingEmployeesTable = pgTable("phishing_employees", {
   customerId: uuid("customer_id")
     .notNull()
     .references(() => customersTable.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").references(() => microsoftTenantsTable.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   email: text("email").notNull(),
   department: text("department"),
