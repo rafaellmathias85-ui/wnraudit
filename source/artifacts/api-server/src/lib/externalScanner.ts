@@ -662,14 +662,16 @@ async function dnsChecks(host: string): Promise<Check[]> {
   return findings;
 }
 
+type PortScanResult = { findings: Check[]; open: boolean; banner: string | null };
+
 async function scanPort(
   host: string,
   port: number,
   service: string,
-): Promise<Check[]> {
+): Promise<PortScanResult> {
   const found: Check[] = [];
   const r = await tcpConnect(host, port);
-  if (!r.open) return found;
+  if (!r.open) return { findings: [], open: false, banner: null };
 
   // Open port itself
   if (HIGH_RISK_EXPOSED_PORTS.has(port)) {
@@ -891,11 +893,274 @@ async function scanPort(
     }
   }
 
-  return found;
+  return { findings: found, open: true, banner: r.banner };
+}
+
+// ── Active Pentest Checks ─────────────────────────────────────────────────
+
+const SQLI_TEST_PARAMS = ["id", "q", "search", "name", "user", "page", "item", "category"];
+
+const SQLI_ERROR_PATTERNS = [
+  /you have an error in your sql syntax/i,
+  /warning:\s*mysql/i,
+  /unclosed quotation mark after/i,
+  /quoted string not properly terminated/i,
+  /pg_query\(\)/i,
+  /ora-\d{4,}/i,
+  /microsoft ole db.*sql server/i,
+  /odbc drivers error/i,
+  /mysql_fetch_array/i,
+  /sqlite_error/i,
+  /jdbc\s+error/i,
+  /syntax error.*near\s+['"]/i,
+  /supplied argument is not a valid mysql/i,
+  /unexpected end of sql command/i,
+  /invalid query.*near/i,
+];
+
+async function checkSQLi(host: string, port: number, https: boolean): Promise<Check[]> {
+  const proto = https ? "https" : "http";
+  const baseUrl = `${proto}://${host}:${port}`;
+
+  let baselineStatus = 0;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${baseUrl}/`, { method: "GET", redirect: "manual", signal: ctrl.signal });
+    clearTimeout(t);
+    baselineStatus = res.status;
+  } catch {
+    return [];
+  }
+  if (![200, 301, 302, 403, 401].includes(baselineStatus)) return [];
+
+  for (const param of SQLI_TEST_PARAMS) {
+    for (const payload of ["'", "\"", "' OR '1'='1'--"]) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5000);
+        const url = `${baseUrl}/?${param}=${encodeURIComponent(payload)}`;
+        const res = await fetch(url, {
+          method: "GET",
+          redirect: "manual",
+          signal: ctrl.signal,
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; SecurityScanner/1.0)" },
+        });
+        clearTimeout(t);
+        const body = await res.text().catch(() => "");
+        const matched = SQLI_ERROR_PATTERNS.find((p) => p.test(body));
+        if (matched) {
+          return [{
+            controlId: `EXT.WEB.SQLI.${port}`,
+            title: "SQL Injection confirmado — erro de banco de dados exposto",
+            category: "Injeção (OWASP A03)",
+            severity: "critical",
+            status: "open",
+            affectedResource: `${baseUrl}/?${param}=`,
+            description: `O parâmetro '${param}' retornou mensagem de erro SQL ao receber o payload '${payload}', confirmando SQL Injection. Erros detalhados de banco estão sendo expostos ao cliente.`,
+            rationale: "SQL Injection permite ao atacante ler, modificar ou excluir dados, contornar autenticação e em muitos servidores executar comandos no sistema operacional.",
+            remediation: "1. Substitua toda concatenação SQL por prepared statements.\n2. Configure o banco para não expor erros em produção.\n3. Implemente WAF como defesa adicional.\n4. Revise todas as queries da aplicação.\n5. Aplique o princípio do menor privilégio na conta do banco.",
+            references: ["OWASP A03:2021 — Injection", "CWE-89"],
+            evidence: { url, param, payload, responseSnippet: body.substring(0, 400) },
+          }];
+        }
+      } catch {
+        // Connection error or timeout — continue
+      }
+    }
+  }
+  return [];
+}
+
+const XSS_PAYLOADS = [
+  { payload: "<script>alert(1)</script>", indicator: "<script>alert(1)" },
+  { payload: '"><img src=x onerror=alert(1)>', indicator: "onerror=alert(1)" },
+  { payload: "<svg onload=alert(1)>", indicator: "onload=alert(1)" },
+];
+
+const XSS_TEST_PARAMS = ["q", "search", "query", "name", "input", "msg", "comment", "s", "keyword", "term"];
+
+async function checkXSS(host: string, port: number, https: boolean): Promise<Check[]> {
+  const proto = https ? "https" : "http";
+  const baseUrl = `${proto}://${host}:${port}`;
+
+  let baselineStatus = 0;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${baseUrl}/`, { method: "GET", redirect: "manual", signal: ctrl.signal });
+    clearTimeout(t);
+    baselineStatus = res.status;
+  } catch {
+    return [];
+  }
+  if (![200, 301, 302, 403, 401].includes(baselineStatus)) return [];
+
+  for (const param of XSS_TEST_PARAMS) {
+    for (const { payload, indicator } of XSS_PAYLOADS) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5000);
+        const url = `${baseUrl}/?${param}=${encodeURIComponent(payload)}`;
+        const res = await fetch(url, {
+          method: "GET",
+          redirect: "manual",
+          signal: ctrl.signal,
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; SecurityScanner/1.0)" },
+        });
+        clearTimeout(t);
+        const body = await res.text().catch(() => "");
+        if (body.includes(indicator)) {
+          return [{
+            controlId: `EXT.WEB.XSS.REFLECTED.${port}`,
+            title: "Cross-Site Scripting (XSS) Refletido confirmado",
+            category: "XSS (OWASP A03)",
+            severity: "high",
+            status: "open",
+            affectedResource: `${baseUrl}/?${param}=`,
+            description: `O parâmetro '${param}' reflete o payload XSS sem sanitização: '${indicator}' aparece não-codificado no HTML da resposta.`,
+            rationale: "XSS refletido permite que atacantes criem links maliciosos que executam scripts no navegador da vítima, roubando sessões, credenciais ou redirecionando para phishing.",
+            remediation: "1. Encode todos os dados dinâmicos para o contexto HTML (HTML entity encoding).\n2. Implemente Content-Security-Policy rigorosa.\n3. Use frameworks com encoding automático (React, Angular, Vue).\n4. Valide e rejeite inputs com caracteres HTML no servidor.",
+            references: ["OWASP A03:2021 — XSS", "CWE-79"],
+            evidence: { url, param, payload, reflectedIndicator: indicator },
+          }];
+        }
+      } catch {
+        // Continue
+      }
+    }
+  }
+  return [];
+}
+
+const BRUTE_HTTP_CREDS: [string, string][] = [
+  ["admin", "admin"], ["admin", "password"], ["admin", "123456"],
+  ["admin", "admin123"], ["admin", "pass"], ["admin", ""],
+  ["root", "root"], ["root", "toor"], ["root", "password"],
+  ["user", "user"], ["user", "password"], ["test", "test"],
+  ["guest", "guest"], ["administrator", "administrator"],
+  ["admin", "1234"], ["admin", "qwerty"], ["admin", "letmein"],
+];
+
+const BRUTE_FTP_CREDS: [string, string][] = [
+  ["anonymous", "anonymous@scan.local"],
+  ["ftp", "ftp"], ["admin", "admin"], ["root", "root"], ["user", "user"],
+];
+
+async function tryFtpLogin(host: string, user: string, pass: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let stage = 0;
+    let buf = "";
+    const done = (success: boolean) => { sock.destroy(); resolve(success); };
+    sock.setTimeout(6000);
+    sock.once("timeout", () => done(false));
+    sock.once("error", () => done(false));
+    sock.on("data", (chunk) => {
+      buf += chunk.toString();
+      if (stage === 0 && buf.includes("220")) {
+        sock.write(`USER ${user}\r\n`); stage = 1; buf = "";
+      } else if (stage === 1) {
+        if (buf.includes("230")) { done(true); return; }
+        if (buf.includes("331")) { sock.write(`PASS ${pass}\r\n`); stage = 2; buf = ""; }
+        else { done(false); }
+      } else if (stage === 2) {
+        if (buf.includes("230")) { done(true); return; }
+        done(false);
+      }
+    });
+    sock.connect(21, host);
+  });
+}
+
+async function checkBruteForce(
+  host: string,
+  openPorts: Array<{ port: number; service: string; banner: string | null }>,
+): Promise<Check[]> {
+  const findings: Check[] = [];
+
+  // FTP brute force
+  if (openPorts.some((p) => p.port === 21)) {
+    for (const [user, pass] of BRUTE_FTP_CREDS) {
+      const ok = await tryFtpLogin(host, user, pass).catch(() => false);
+      if (ok) {
+        findings.push({
+          controlId: "EXT.AUTH.FTP.BRUTE",
+          title: `Credenciais padrão aceitas no FTP: ${user}:${pass || "(vazio)"}`,
+          category: "Autenticação Fraca (OWASP A07)",
+          severity: "critical",
+          status: "open",
+          affectedResource: `ftp://${host}:21`,
+          description: `Login FTP bem-sucedido com '${user}:${pass || "(vazio)"}'. O servidor aceita credenciais padrão ou acesso anônimo.`,
+          rationale: "FTP com credenciais padrão permite que qualquer atacante acesse, exfiltre ou sobrescreva arquivos, podendo fazer upload de shells e comprometer o servidor.",
+          remediation: "1. Desabilite FTP anônimo.\n2. Altere credenciais padrão para senhas fortes.\n3. Substitua FTP por SFTP ou FTPS com TLS.\n4. Bloqueie porta 21 na borda se não houver necessidade externa.",
+          references: ["CWE-1391", "OWASP A07:2021 — Authentication Failures"],
+          evidence: { username: user, password: pass || "(vazio)", protocol: "FTP" },
+        });
+        break;
+      }
+    }
+  }
+
+  // HTTP Basic Auth brute force
+  const httpWebPorts = openPorts.filter((p) => HTTP_PORTS.has(p.port) || HTTPS_PORTS.has(p.port));
+  for (const { port } of httpWebPorts) {
+    const isHttps = HTTPS_PORTS.has(port);
+    const proto = isHttps ? "https" : "http";
+    const url = `${proto}://${host}:${port}/`;
+    let requiresBasicAuth = false;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(url, { method: "GET", redirect: "manual", signal: ctrl.signal });
+      clearTimeout(t);
+      const auth = res.headers.get("www-authenticate") ?? "";
+      requiresBasicAuth = res.status === 401 && auth.toLowerCase().includes("basic");
+    } catch {
+      continue;
+    }
+    if (!requiresBasicAuth) continue;
+
+    for (const [user, pass] of BRUTE_HTTP_CREDS) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 4000);
+        const cred = Buffer.from(`${user}:${pass}`).toString("base64");
+        const res = await fetch(url, {
+          method: "GET",
+          headers: { Authorization: `Basic ${cred}` },
+          redirect: "manual",
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        if (res.status !== 401) {
+          findings.push({
+            controlId: `EXT.AUTH.HTTP.BRUTE.${port}`,
+            title: `Credenciais padrão aceitas — HTTP Basic Auth (porta ${port})`,
+            category: "Autenticação Fraca (OWASP A07)",
+            severity: "critical",
+            status: "open",
+            affectedResource: url,
+            description: `Login bem-sucedido com '${user}:${pass || "(vazio)"}' via HTTP Basic Auth. O recurso retornou ${res.status} com essas credenciais.`,
+            rationale: "Credenciais padrão são a primeira tentativa de qualquer scanner ou atacante. Acesso obtido a este recurso.",
+            remediation: "1. Altere imediatamente as credenciais para senhas fortes e únicas.\n2. Implemente bloqueio após tentativas falhas.\n3. Substitua HTTP Basic Auth por autenticação moderna.\n4. Habilite MFA onde possível.",
+            references: ["CWE-1391", "OWASP A07:2021"],
+            evidence: { url, username: user, password: pass || "(vazio)", responseCode: res.status },
+          });
+          break;
+        }
+      } catch {
+        // Continue
+      }
+    }
+  }
+
+  return findings;
 }
 
 async function runScanForHost(host: string): Promise<ExternalScanResult> {
   const findings: Check[] = [];
+  const openPortsList: Array<{ port: number; service: string; banner: string | null }> = [];
 
   // Port scan with concurrency limit
   const concurrency = 8;
@@ -909,7 +1174,8 @@ async function runScanForHost(host: string): Promise<ExternalScanResult> {
           if (!item) return;
           try {
             const r = await scanPort(host, item.port, item.service);
-            findings.push(...r);
+            findings.push(...r.findings);
+            if (r.open) openPortsList.push({ port: item.port, service: item.service, banner: r.banner });
           } catch (err) {
             logger.warn(
               { err, port: item.port, host },
@@ -924,14 +1190,34 @@ async function runScanForHost(host: string): Promise<ExternalScanResult> {
 
   findings.push(...(await dnsChecks(host)));
 
-  // Web-specific checks on HTTP ports (exposed paths + CORS)
-  const [httpsExp, httpsCorsFin, httpExp, httpCorsFin] = await Promise.all([
-    exposedPathsCheck(host, 443, true),
-    corsCheck(host, 443, true),
-    exposedPathsCheck(host, 80, false),
-    corsCheck(host, 80, false),
-  ]);
-  findings.push(...httpsExp, ...httpsCorsFin, ...httpExp, ...httpCorsFin);
+  // Passive web checks (exposed paths + CORS) on standard ports + any other open web ports
+  const webPortSet = new Set<number>([80, 443]);
+  for (const p of openPortsList) {
+    if (HTTP_PORTS.has(p.port) || HTTPS_PORTS.has(p.port)) webPortSet.add(p.port);
+  }
+  const passiveWebTasks: Promise<Check[]>[] = [];
+  for (const port of webPortSet) {
+    const isHttps = HTTPS_PORTS.has(port);
+    passiveWebTasks.push(exposedPathsCheck(host, port, isHttps), corsCheck(host, port, isHttps));
+  }
+  const passiveWebResults = await Promise.all(passiveWebTasks);
+  for (const r of passiveWebResults) findings.push(...r);
+
+  // Active pentest: SQLi and XSS on open web ports
+  const openWebPorts = openPortsList.filter((p) => HTTP_PORTS.has(p.port) || HTTPS_PORTS.has(p.port));
+  if (openWebPorts.length > 0) {
+    const activeTasks: Promise<Check[]>[] = [];
+    for (const p of openWebPorts) {
+      const isHttps = HTTPS_PORTS.has(p.port);
+      activeTasks.push(checkSQLi(host, p.port, isHttps));
+      activeTasks.push(checkXSS(host, p.port, isHttps));
+    }
+    const activeResults = await Promise.all(activeTasks);
+    for (const r of activeResults) findings.push(...r);
+  }
+
+  // Active pentest: credential brute force on open services
+  findings.push(...(await checkBruteForce(host, openPortsList)));
 
   let critical = 0,
     high = 0,

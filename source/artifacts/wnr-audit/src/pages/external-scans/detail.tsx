@@ -13,8 +13,9 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ArrowLeft, Bot, ChevronDown, ChevronUp, Loader2, Send, XCircle, ShieldAlert, ShieldCheck, CheckCircle, Globe } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, ChevronUp, FileText, Loader2, Send, XCircle, ShieldAlert, ShieldCheck, CheckCircle, Globe } from "lucide-react";
 import { SeverityBadge } from "@/components/ui/severity-badge";
+import { useToast } from "@/hooks/use-toast";
 
 const SEVERITY_ORDER: Severity[] = [
   Severity.critical,
@@ -169,6 +170,25 @@ function ControlChat({ findingId }: { findingId: string }) {
 export default function ExternalScanDetail({ scanId }: { scanId: string }) {
   const [, setLocation] = useLocation();
   const [openChatId, setOpenChatId] = useState<string | null>(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const { toast } = useToast();
+
+  async function handleGenerateReport() {
+    setIsGeneratingReport(true);
+    try {
+      const res = await fetch(`/api/external-scans/${scanId}/report`, { credentials: "include" });
+      if (!res.ok) { toast({ variant: "destructive", title: "Erro ao gerar laudo" }); return; }
+      const html = await res.text();
+      const win = window.open("", "_blank");
+      win?.document.open();
+      win?.document.write(html);
+      win?.document.close();
+    } catch {
+      toast({ variant: "destructive", title: "Falha ao gerar laudo. Tente novamente." });
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  }
 
   const { data: scan, isLoading } = useGetExternalScan(scanId, {
     query: { enabled: !!scanId, queryKey: getGetExternalScanQueryKey(scanId) },
@@ -210,7 +230,7 @@ export default function ExternalScanDetail({ scanId }: { scanId: string }) {
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <div>
+        <div className="flex-1">
           <h1 className="text-3xl font-display font-bold tracking-tight flex items-center gap-3">
             <Globe className="h-7 w-7 text-primary" />
             Varredura externa — {scan.deviceName}
@@ -222,6 +242,12 @@ export default function ExternalScanDetail({ scanId }: { scanId: string }) {
             {scan.completedAt && ` • Concluída às ${format(new Date(scan.completedAt), "HH:mm")}`}
           </p>
         </div>
+        {scan.status === ScanStatus.completed && (
+          <Button variant="outline" size="sm" onClick={handleGenerateReport} disabled={isGeneratingReport}>
+            {isGeneratingReport ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileText className="h-4 w-4 mr-2" />}
+            Gerar Laudo
+          </Button>
+        )}
       </div>
 
       {scan.status !== ScanStatus.completed && (
