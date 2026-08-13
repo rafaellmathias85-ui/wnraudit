@@ -189,6 +189,67 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "device_scans" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "device_id" uuid NOT NULL,
+        "device_type" device_type NOT NULL DEFAULT 'external',
+        "status" scan_status NOT NULL DEFAULT 'pending',
+        "started_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "completed_at" timestamp with time zone,
+        "total_checks" integer NOT NULL DEFAULT 0,
+        "passed_checks" integer NOT NULL DEFAULT 0,
+        "failed_checks" integer NOT NULL DEFAULT 0,
+        "critical_count" integer NOT NULL DEFAULT 0,
+        "high_count" integer NOT NULL DEFAULT 0,
+        "medium_count" integer NOT NULL DEFAULT 0,
+        "low_count" integer NOT NULL DEFAULT 0
+      )
+    `);
+
+    await db.execute(sql`
+      ALTER TABLE "device_scans" ADD COLUMN IF NOT EXISTS "total_checks" integer NOT NULL DEFAULT 0;
+    `);
+    await db.execute(sql`
+      ALTER TABLE "device_scans" ADD COLUMN IF NOT EXISTS "passed_checks" integer NOT NULL DEFAULT 0;
+    `);
+    await db.execute(sql`
+      ALTER TABLE "device_scans" ADD COLUMN IF NOT EXISTS "failed_checks" integer NOT NULL DEFAULT 0;
+    `);
+    await db.execute(sql`
+      ALTER TABLE "device_scans" ADD COLUMN IF NOT EXISTS "critical_count" integer NOT NULL DEFAULT 0;
+    `);
+    await db.execute(sql`
+      ALTER TABLE "device_scans" ADD COLUMN IF NOT EXISTS "high_count" integer NOT NULL DEFAULT 0;
+    `);
+    await db.execute(sql`
+      ALTER TABLE "device_scans" ADD COLUMN IF NOT EXISTS "medium_count" integer NOT NULL DEFAULT 0;
+    `);
+    await db.execute(sql`
+      ALTER TABLE "device_scans" ADD COLUMN IF NOT EXISTS "low_count" integer NOT NULL DEFAULT 0;
+    `);
+
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "device_findings" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "device_scan_id" uuid NOT NULL REFERENCES "device_scans"("id") ON DELETE CASCADE,
+        "control_id" text NOT NULL,
+        "title" text NOT NULL,
+        "category" text NOT NULL,
+        "severity" severity NOT NULL,
+        "status" finding_status NOT NULL DEFAULT 'open',
+        "affected_resource" text,
+        "description" text NOT NULL,
+        "rationale" text NOT NULL,
+        "remediation" text NOT NULL,
+        "references" jsonb NOT NULL DEFAULT '[]'::jsonb,
+        "evidence" jsonb,
+        "note" text,
+        "detected_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      )
+    `);
+
     logger.info("Schema bootstrap: OK");
   } catch (err) {
     logger.error({ err }, "Schema bootstrap failed");
