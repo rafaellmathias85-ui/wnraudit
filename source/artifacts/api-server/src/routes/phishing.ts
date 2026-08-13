@@ -1098,13 +1098,12 @@ async function recordEvent(
     .limit(1);
   if (!target) return null;
 
-  // Bot/scanner detection: security scanners (Microsoft Safe Links, etc.) fire within
-  // seconds of delivery. Real humans take at minimum a few minutes to open and act.
-  // Ignore open/click events that arrive within 60 s of sentAt.
+  // Bot/scanner detection: Microsoft Safe Links and Google Safe Browsing scan within
+  // 5-15 s of delivery. Drop open/click events that arrive within 20 s of sentAt.
   if (target.sentAt && (eventType === "opened" || eventType === "clicked")) {
     const msSinceSent = Date.now() - new Date(target.sentAt).getTime();
-    if (msSinceSent < 60_000) {
-      logger.info({ token, eventType, msSinceSent }, "Event ignored: automated scanner (within 60s of delivery)");
+    if (msSinceSent < 20_000) {
+      logger.info({ token, eventType, msSinceSent }, "Event ignored: automated scanner (within 20s of delivery)");
       return target;
     }
   }
@@ -1149,6 +1148,8 @@ router.get("/phishing/track/:token/open", async (req, res): Promise<void> => {
 // Tracking click — redirect to training
 router.get("/phishing/track/:token/click", async (req, res): Promise<void> => {
   const token = req.params.token as string;
+  // Clicking the phishing link implies the email was opened — record both
+  await recordEvent(token, "opened",  { ip: req.ip, ua: req.headers["user-agent"], via: "click" }).catch(() => {});
   await recordEvent(token, "clicked", { ip: req.ip, ua: req.headers["user-agent"] }).catch(
     () => {},
   );
@@ -1160,6 +1161,8 @@ router.get("/phishing/track/:token/click", async (req, res): Promise<void> => {
 // Report as phishing via email link (GET — opens HTML confirmation page)
 router.get("/phishing/track/:token/report-email", async (req, res): Promise<void> => {
   const token = req.params.token as string;
+  // Clicking the report footer link implies the email was opened — record both
+  await recordEvent(token, "opened",   { ip: req.ip, ua: req.headers["user-agent"], via: "report-email" }).catch(() => {});
   await recordEvent(token, "reported", { ip: req.ip, ua: req.headers["user-agent"], via: "email-link" }).catch(() => {});
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte registrado</title>

@@ -72,7 +72,10 @@ const EVENT_CONFIG: Record<string, { label: string; color: string; Icon: React.E
 };
 
 function getTargetStatus(target: Target): string {
-  const order = ["submitted", "clicked", "opened", "reported", "sent", "failed"];
+  // reported is checked before opened: if someone reported without clicking the phishing link,
+  // the green "reported" status takes priority over the synthetic "opened" event we generate
+  // from the report-email click. If they also clicked the phishing link, "clicked" wins.
+  const order = ["submitted", "clicked", "reported", "opened", "sent", "failed"];
   for (const e of order) {
     if (target.events.some((ev) => ev.eventType === e)) return e;
   }
@@ -165,8 +168,8 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
 
   const targets = campaign.targets ?? [];
   const sentCount = targets.filter((t) => t.sentAt).length;
-  // "opened" = pixel loaded OR clicked/submitted — clicking implies the email was opened
-  const openedCount = targets.filter((t) => t.events.some((e) => ["opened", "clicked", "submitted"].includes(e.eventType))).length;
+  // "opened" = pixel loaded OR clicked/submitted/reported — any link click implies the email was opened
+  const openedCount = targets.filter((t) => t.events.some((e) => ["opened", "clicked", "submitted", "reported"].includes(e.eventType))).length;
   // "clicked" = clicked OR submitted — submitting credentials implies having clicked
   const clickedCount = targets.filter((t) => t.events.some((e) => ["clicked", "submitted"].includes(e.eventType))).length;
   const submittedCount = targets.filter((t) => t.events.some((e) => e.eventType === "submitted")).length;
