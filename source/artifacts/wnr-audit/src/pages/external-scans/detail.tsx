@@ -179,10 +179,16 @@ export default function ExternalScanDetail({ scanId }: { scanId: string }) {
       const res = await fetch(`/api/external-scans/${scanId}/report`, { credentials: "include" });
       if (!res.ok) { toast({ variant: "destructive", title: "Erro ao gerar laudo" }); return; }
       const html = await res.text();
-      const win = window.open("", "_blank");
-      win?.document.open();
-      win?.document.write(html);
-      win?.document.close();
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch {
       toast({ variant: "destructive", title: "Falha ao gerar laudo. Tente novamente." });
     } finally {

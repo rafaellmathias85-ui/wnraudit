@@ -8,7 +8,7 @@ import {
 } from "@workspace/db";
 import { schemas } from "@workspace/api-zod";
 import { requireAuth } from "../middlewares/requireAuth";
-import { runExternalScan } from "../lib/externalScanner";
+import { runExternalScan, COMMON_PORTS, HIGH_RISK_EXPOSED_PORTS } from "../lib/externalScanner";
 import { logger } from "../lib/logger";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 
@@ -579,20 +579,32 @@ Responda EXATAMENTE neste formato:
   </div>
 
   <div class="sec">
-    <h2 class="sec-title">2. Metodologia</h2>
-    <p style="font-size:13px;color:#374151;line-height:1.7;margin-bottom:10px">A varredura foi realizada pela plataforma WNR Audit com técnicas de análise passiva e ativa de superfície externa. Controles avaliados:</p>
-    <ul style="margin-left:20px;font-size:12px;color:#374151;line-height:1.9">
-      <li>Reconhecimento de portas TCP (50 portas comuns) com identificação de serviço por banner</li>
-      <li>Correlação de versões com CVEs conhecidos (OpenSSH, Apache, IIS, nginx, vsFTPd, Telnet)</li>
-      <li>Análise de configuração TLS/SSL (protocolo, cipher suite, certificado, validade)</li>
-      <li>Verificação de cabeçalhos HTTP de segurança (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)</li>
-      <li>Detecção de arquivos e caminhos sensíveis expostos (.env, .git, phpinfo, backups — 13 caminhos)</li>
-      <li>Análise de política CORS (Access-Control-Allow-Origin)</li>
-      <li>Auditoria de registros DNS de segurança (SPF, DMARC, DKIM, MTA-STS)</li>
-      <li><strong>Teste ativo de SQL Injection</strong> em 8 parâmetros de URL × 3 payloads</li>
-      <li><strong>Teste ativo de Cross-Site Scripting (XSS) refletido</strong> em 10 parâmetros × 3 payloads</li>
-      <li><strong>Teste de credenciais padrão</strong> — 5 pares FTP + 17 pares HTTP Basic Auth</li>
-    </ul>
+    <h2 class="sec-title">2. Metodologia e Referências ISO/IEC 27001:2022</h2>
+    <p style="font-size:13px;color:#374151;line-height:1.7;margin-bottom:10px">
+      Avaliação realizada pela plataforma WNR Audit com técnicas passivas e ativas de análise de superfície externa,
+      alinhada aos controles da <strong>ISO/IEC 27001:2022 (Anexo A)</strong> e ao framework <strong>OWASP Top 10</strong>.
+    </p>
+    <table style="margin-bottom:10px">
+      <thead>
+        <tr>
+          <th style="width:180px">Técnica</th>
+          <th style="width:130px">Controle ISO 27001</th>
+          <th>Descrição</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Varredura de Portas TCP</td><td>A.8.8 — Gestão de Vulnerabilidades</td><td>50 portas TCP verificadas com identificação de serviço por banner e correlação de versões com CVEs (OpenSSH, Apache, IIS, nginx, vsFTPd, Telnet)</td></tr>
+        <tr><td>Criptografia TLS/SSL</td><td>A.8.24 — Uso de Criptografia</td><td>Protocolo TLS, cipher suite, validade e cadeia do certificado verificados em todas as portas HTTPS abertas</td></tr>
+        <tr><td>Cabeçalhos HTTP</td><td>A.8.23 — Filtragem de Conteúdo Web</td><td>HSTS, CSP, X-Frame-Options, X-Content-Type-Options e Referrer-Policy verificados em todas as portas web</td></tr>
+        <tr><td>Arquivos Sensíveis Expostos</td><td>A.8.12 — Prevenção de Vazamento de Dados</td><td>13 caminhos críticos verificados (.env, .git, phpinfo, backups, config.php, db.sql, etc.)</td></tr>
+        <tr><td>Política CORS</td><td>A.8.23 — Filtragem de Conteúdo Web</td><td>Verificação de Access-Control-Allow-Origin para permissividade excessiva</td></tr>
+        <tr><td>DNS / E-mail (SPF, DMARC, DKIM, MTA-STS)</td><td>A.5.14 — Transferência de Informação</td><td>Registros de autenticação de e-mail verificados para prevenção de spoofing e phishing</td></tr>
+        <tr><td><strong>SQL Injection (ativo)</strong></td><td>A.8.29 — Testes de Segurança</td><td>8 parâmetros de URL × 3 payloads testados com detecção por resposta de erro do banco de dados</td></tr>
+        <tr><td><strong>XSS Refletido (ativo)</strong></td><td>A.8.29 — Testes de Segurança</td><td>10 parâmetros × 3 payloads XSS testados com detecção por reflexo não codificado no HTML</td></tr>
+        <tr><td><strong>Credenciais Padrão (ativo)</strong></td><td>A.8.5 — Autenticação Segura</td><td>5 pares FTP + 17 pares HTTP Basic Auth testados contra credenciais de dicionário comuns</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:11px;color:#6b7280;font-style:italic">Esta avaliação suporta os requisitos da cláusula 9.1 (Monitoramento e Medição) e 10.1 (Melhoria Contínua) da ISO/IEC 27001:2022.</p>
   </div>
 
   <div class="sec">
@@ -626,7 +638,53 @@ Responda EXATAMENTE neste formato:
   </div>
 
   <div class="sec">
-    <h2 class="sec-title">5. Vulnerabilidades Identificadas</h2>
+    <h2 class="sec-title">5. Análise Porta a Porta — Superfície TCP</h2>
+    <p style="font-size:12px;color:#6b7280;margin-bottom:10px">
+      Resultado individual das ${COMMON_PORTS.length} portas TCP verificadas no host <code>${asset.host}</code>.
+      Portas FECHADAS não são acessíveis da internet — evidência de superfície de ataque minimizada.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:50px">Porta</th>
+          <th style="width:120px">Serviço</th>
+          <th style="width:90px;text-align:center">Status</th>
+          <th style="width:90px">Risco</th>
+          <th>Observação</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${COMMON_PORTS.map(({ port, service }) => {
+          const highRiskFinding = findings.find((f) => f.controlId === `EXT.PORT.${port}`);
+          const openInfoFinding = findings.find((f) => f.controlId === `EXT.PORT.OPEN.${port}`);
+          const isOpen = !!(highRiskFinding || openInfoFinding);
+          const isHighRisk = HIGH_RISK_EXPOSED_PORTS.has(port);
+          const banner = (highRiskFinding?.evidence as Record<string,unknown> | null)?.banner
+            ?? (openInfoFinding?.evidence as Record<string,unknown> | null)?.banner;
+          const statusCell = isOpen
+            ? `<span style="font-size:10px;font-weight:700;color:${isHighRisk ? "#dc2626" : "#d97706"};background:${isHighRisk ? "#fef2f2" : "#fffbeb"};border:1px solid ${isHighRisk ? "#fecaca" : "#fde68a"};padding:2px 8px;border-radius:4px">ABERTA</span>`
+            : `<span style="font-size:10px;font-weight:700;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;padding:2px 8px;border-radius:4px">FECHADA</span>`;
+          const riskCell = !isOpen ? `<span style="color:#6b7280">—</span>`
+            : isHighRisk ? `<span style="color:#dc2626;font-weight:600">ALTO</span>`
+            : `<span style="color:#d97706">INFO</span>`;
+          const obs = !isOpen ? "Porta não responde — protegida"
+            : banner ? String(banner).substring(0, 60)
+            : isHighRisk ? "Serviço de alto risco exposto publicamente"
+            : "Porta aberta — verifique se exposição é intencional";
+          return `<tr style="${isHighRisk && isOpen ? "background:#fff8f8" : ""}">
+            <td style="font-family:monospace;font-weight:600">${port}</td>
+            <td>${service}</td>
+            <td style="text-align:center">${statusCell}</td>
+            <td>${riskCell}</td>
+            <td style="font-size:11px;color:#6b7280">${obs}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="sec">
+    <h2 class="sec-title">6. Vulnerabilidades Identificadas</h2>
     ${nonInfoCount === 0
       ? `<div style="padding:16px 20px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;display:flex;align-items:center;gap:12px">
           <span style="font-size:28px">✓</span>
@@ -651,7 +709,7 @@ Responda EXATAMENTE neste formato:
   </div>
 
   <div class="sec">
-    <h2 class="sec-title">6. Conclusão</h2>
+    <h2 class="sec-title">7. Conclusão</h2>
     <p style="font-size:13px;color:#374151;line-height:1.7">
       A avaliação de superfície externa do ativo <strong>${asset.name}</strong> executou <strong>${totalChecksDisplay} verificações</strong>,
       das quais <strong style="color:#16a34a">${passedChecksDisplay} foram aprovadas</strong> e

@@ -13,7 +13,7 @@ import { logger } from "./logger";
 
 type Severity = "critical" | "high" | "medium" | "low" | "info";
 
-const COMMON_PORTS: Array<{ port: number; service: string }> = [
+export const COMMON_PORTS: Array<{ port: number; service: string }> = [
   { port: 21, service: "FTP" },
   { port: 22, service: "SSH" },
   { port: 23, service: "Telnet" },
@@ -62,7 +62,7 @@ const COMMON_PORTS: Array<{ port: number; service: string }> = [
   { port: 50000, service: "SAP" },
 ];
 
-const HIGH_RISK_EXPOSED_PORTS = new Set<number>([
+export const HIGH_RISK_EXPOSED_PORTS = new Set<number>([
   21, 23, 25, 110, 111, 135, 139, 143, 161, 389, 445, 1433, 1723, 2049, 3306,
   3389, 5432, 5900, 6379, 9200, 11211, 27017,
 ]);
