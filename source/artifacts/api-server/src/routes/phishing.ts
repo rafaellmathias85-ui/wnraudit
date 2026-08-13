@@ -925,51 +925,155 @@ router.get(
 <td>${t.sentAt ? fmtDate(t.sentAt) : "—"}</td></tr>`;
     }).join("");
 
+    const logoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="48" height="48" style="display:block">
+<path d="M100 20 L170 50 V90 C170 140 140 175 100 190 C60 175 30 140 30 90 V50 L100 20 Z" fill="none" stroke="#fff" stroke-width="12" stroke-linejoin="round"/>
+<rect x="75" y="100" width="50" height="35" rx="8" fill="#fff"/>
+<path d="M85 100 V85 C85 75 115 75 115 85 V100" fill="none" stroke="#fff" stroke-width="12" stroke-linecap="round"/>
+<text x="100" y="180" font-family="sans-serif" font-weight="900" font-size="28" fill="#fff" text-anchor="middle" letter-spacing="2">WNR</text>
+</svg>`;
+
+    const statusLabel = campaign.status === "completed" ? "Concluída" : campaign.status === "active" ? "Ativa" : "Rascunho";
+
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
 <title>Relatório — ${campaign.name}</title>
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:0;padding:32px 40px;color:#222;background:#fff}
-h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;color:#555;font-weight:normal;margin:0 0 24px}
-.meta{display:flex;gap:24px;font-size:13px;color:#666;margin-bottom:28px;flex-wrap:wrap}
-.meta span b{color:#222}.stats{display:flex;gap:16px;margin-bottom:28px;flex-wrap:wrap}
-.stat{flex:1;min-width:100px;background:#f8f8f8;border-radius:8px;padding:14px 16px;text-align:center}
-.stat .v{font-size:28px;font-weight:bold}.stat .l{font-size:12px;color:#666;margin-top:2px}
-.risk{display:inline-block;padding:6px 18px;border-radius:20px;font-weight:bold;font-size:15px;color:#fff;margin-bottom:28px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{background:#f0f0f0;padding:10px 12px;text-align:left;font-weight:600;border-bottom:2px solid #ddd}
-td{padding:9px 12px;border-bottom:1px solid #eee}
-tr:last-child td{border-bottom:none}tr:hover td{background:#fafafa}
-.footer{margin-top:32px;font-size:11px;color:#aaa;border-top:1px solid #eee;padding-top:12px}
-@media print{body{padding:16px}button{display:none}.no-print{display:none}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;color:#222;background:#fff;font-size:13px}
+.page{max-width:900px;margin:0 auto;padding:0 0 40px}
+
+/* Header */
+.header{background:#1a2a4a;color:#fff;padding:24px 40px;display:flex;justify-content:space-between;align-items:center}
+.header-left{display:flex;align-items:center;gap:16px}
+.brand-name{font-size:20px;font-weight:900;letter-spacing:1px;line-height:1.1}
+.brand-sub{font-size:11px;color:#94a3b8;letter-spacing:2px;text-transform:uppercase;margin-top:2px}
+.header-right{text-align:right}
+.report-label{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#94a3b8}
+.report-date{font-size:12px;color:#cbd5e1;margin-top:4px}
+
+/* Subject bar */
+.subject-bar{background:#1e3a6e;color:#fff;padding:14px 40px;font-size:17px;font-weight:700;letter-spacing:0.3px}
+
+/* Meta grid */
+.meta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#e5e7eb;margin:0;border-bottom:1px solid #e5e7eb}
+.meta-cell{background:#fff;padding:14px 20px}
+.meta-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#6b7280;margin-bottom:4px;font-weight:700}
+.meta-value{font-size:13px;color:#111;font-weight:600}
+
+/* Section */
+.section{padding:24px 40px}
+.section-title{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#1e3a6e;font-weight:700;border-bottom:2px solid #1e3a6e;padding-bottom:6px;margin-bottom:16px}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:0}
+.stat{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px 10px;text-align:center}
+.stat-v{font-size:26px;font-weight:800;line-height:1}
+.stat-l{font-size:10px;color:#6b7280;margin-top:4px;letter-spacing:0.5px}
+
+/* Risk badge */
+.risk-row{display:flex;align-items:center;gap:12px;margin-top:20px}
+.risk-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:6px;font-weight:700;font-size:14px;color:#fff}
+.risk-pct{font-size:12px;color:#6b7280}
+
+/* Table */
+table{width:100%;border-collapse:collapse}
+thead tr{background:#f1f5f9}
+th{padding:10px 14px;text-align:left;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#64748b;font-weight:700;border-bottom:2px solid #e2e8f0}
+td{padding:11px 14px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#f8fafc}
+.badge{display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700}
+
+/* Footer */
+.footer-conf{background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:12px 16px;font-size:11px;color:#713f12;margin:0 40px 0}
+.footer-bar{display:flex;justify-content:space-between;align-items:center;padding:16px 40px;border-top:1px solid #e5e7eb;margin-top:24px}
+.footer-bar-left{font-size:11px;color:#9ca3af}
+.footer-bar-right{font-size:11px;color:#9ca3af;text-align:right}
+
+/* Print */
+.no-print{}
+@media print{
+  .no-print{display:none!important}
+  body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .subject-bar{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
 </style></head><body>
-<div style="display:flex;justify-content:space-between;align-items:flex-start">
-<div><h1>Relatório de Campanha de Phishing Simulado</h1><h2>${campaign.name}</h2></div>
-<button onclick="window.print()" class="no-print" style="padding:8px 20px;background:#1565c0;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🖨️ Imprimir / Salvar PDF</button>
+<div class="page">
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    ${logoSvg}
+    <div>
+      <div class="brand-name">Winner Tecnologia</div>
+      <div class="brand-sub">WNR Audit · Segurança da Informação</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="report-label">Relatório de Campanha</div>
+    <div class="report-date">Gerado em ${fmtDate(new Date())}</div>
+    <button onclick="window.print()" class="no-print" style="margin-top:10px;padding:6px 16px;background:#334155;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:0.5px">🖨️ Imprimir / PDF</button>
+  </div>
 </div>
-<div class="meta">
-<span><b>Cliente:</b> ${campaign.tenantDisplayName ?? "—"}</span>
-<span><b>Status:</b> ${campaign.status === "completed" ? "Concluída" : campaign.status === "active" ? "Ativa" : "Rascunho"}</span>
-<span><b>Iniciada:</b> ${fmtDate(campaign.startedAt)}</span>
-<span><b>Concluída:</b> ${fmtDate(campaign.completedAt)}</span>
-<span><b>Gerado em:</b> ${fmtDate(new Date())}</span>
+
+<!-- SUBJECT BAR -->
+<div class="subject-bar">Phishing Simulado — ${campaign.name}</div>
+
+<!-- META -->
+<div class="meta-grid">
+  <div class="meta-cell"><div class="meta-label">Cliente</div><div class="meta-value">${campaign.tenantDisplayName ?? "—"}</div></div>
+  <div class="meta-cell"><div class="meta-label">Status</div><div class="meta-value">${statusLabel}</div></div>
+  <div class="meta-cell"><div class="meta-label">Remetente simulado</div><div class="meta-value">${campaign.senderName} &lt;${campaign.senderEmail}&gt;</div></div>
+  <div class="meta-cell"><div class="meta-label">Data de início</div><div class="meta-value">${fmtDate(campaign.startedAt)}</div></div>
+  <div class="meta-cell"><div class="meta-label">Data de conclusão</div><div class="meta-value">${fmtDate(campaign.completedAt)}</div></div>
+  <div class="meta-cell"><div class="meta-label">Total de alvos</div><div class="meta-value">${total} funcionário(s)</div></div>
 </div>
-<div class="stats">
-<div class="stat"><div class="v">${total}</div><div class="l">Alvos</div></div>
-<div class="stat"><div class="v">${sent}</div><div class="l">Enviados</div></div>
-<div class="stat"><div class="v" style="color:#1565c0">${opened}</div><div class="l">Abriram</div></div>
-<div class="stat"><div class="v" style="color:#e65100">${clicked}</div><div class="l">Clicaram</div></div>
-<div class="stat"><div class="v" style="color:#c62828">${submitted}</div><div class="l">Submeteram cred.</div></div>
-<div class="stat"><div class="v" style="color:#2e7d32">${reported}</div><div class="l">Reportaram</div></div>
+
+<!-- STATS -->
+<div class="section">
+  <div class="section-title">Resumo de Resultados</div>
+  <div class="stats">
+    <div class="stat"><div class="stat-v">${sent}</div><div class="stat-l">Enviados</div></div>
+    <div class="stat"><div class="stat-v" style="color:#1565c0">${opened}</div><div class="stat-l">Abriram</div></div>
+    <div class="stat"><div class="stat-v" style="color:#e65100">${clicked}</div><div class="stat-l">Clicaram</div></div>
+    <div class="stat"><div class="stat-v" style="color:#c62828">${submitted}</div><div class="stat-l">Submeteram cred.</div></div>
+    <div class="stat"><div class="stat-v" style="color:#2e7d32">${reported}</div><div class="stat-l">Reportaram</div></div>
+    <div class="stat"><div class="stat-v" style="color:#6b7280">${sent - opened}</div><div class="stat-l">Não abriram</div></div>
+  </div>
+  <div class="risk-row">
+    <span class="risk-badge" style="background:${riskColor}">${riskLabel}</span>
+    <span class="risk-pct">${riskPct}% dos alvos clicaram no link ou submeteram credenciais</span>
+  </div>
 </div>
-<div>
-<span style="font-size:13px;font-weight:600;color:#555">Nível de risco geral:&nbsp;</span>
-<span class="risk" style="background:${riskColor}">${riskLabel} — ${riskPct}% clicaram ou submeteram</span>
+
+<!-- TABLE -->
+<div class="section" style="padding-top:0">
+  <div class="section-title">Detalhamento por Funcionário</div>
+  <table>
+    <thead><tr><th>#</th><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Resultado</th><th>Enviado em</th></tr></thead>
+    <tbody>${targets.map((t, i) => {
+      const evs = eventsByTarget.get(t.id) ?? new Set<string>();
+      const s = getStatus(evs);
+      return `<tr><td style="color:#9ca3af">${i + 1}</td><td style="font-weight:600">${t.employeeName}</td><td>${t.employeeEmail}</td><td>${t.employeeDepartment ?? "—"}</td>
+<td><span class="badge" style="background:${s.color}18;color:${s.color}">${s.label}</span></td>
+<td style="color:#6b7280">${t.sentAt ? fmtDate(t.sentAt) : "—"}</td></tr>`;
+    }).join("")}</tbody>
+  </table>
 </div>
-<table><thead><tr><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Resultado</th><th>Enviado em</th></tr></thead>
-<tbody>${rows}</tbody></table>
-<div class="footer">WNR Audit — Relatório gerado automaticamente. Confidencial — uso interno.</div>
-</body></html>`);
+
+<!-- CONFIDENTIALITY -->
+<div class="footer-conf">
+  <strong>Aviso de Confidencialidade:</strong> Este relatório é confidencial e destinado exclusivamente ao cliente solicitante. As informações contidas neste documento referem-se à campanha de phishing simulado realizada pela Winner Tecnologia e não devem ser reproduzidas ou distribuídas sem autorização prévia.
+</div>
+
+<!-- FOOTER BAR -->
+<div class="footer-bar">
+  <div class="footer-bar-left"><strong>Winner Tecnologia</strong><br>WNR Audit · Suporte Técnico Especializado</div>
+  <div class="footer-bar-right">Documento gerado em ${fmtDate(new Date())}<br>Gerado automaticamente pelo WNR Audit</div>
+</div>
+
+</div></body></html>`);
   },
 );
 
