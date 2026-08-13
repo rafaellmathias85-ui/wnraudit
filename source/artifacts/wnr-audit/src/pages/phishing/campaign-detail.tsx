@@ -168,8 +168,8 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
 
   const targets = campaign.targets ?? [];
   const sentCount = targets.filter((t) => t.sentAt).length;
-  // "opened" = pixel loaded OR clicked/submitted/reported — any link click implies the email was opened
-  const openedCount = targets.filter((t) => t.events.some((e) => ["opened", "clicked", "submitted", "reported"].includes(e.eventType))).length;
+  // "opened" = pixel loaded OR clicked/submitted — clicking the phishing link implies the email was opened
+  const openedCount = targets.filter((t) => t.events.some((e) => ["opened", "clicked", "submitted"].includes(e.eventType))).length;
   // "clicked" = clicked OR submitted — submitting credentials implies having clicked
   const clickedCount = targets.filter((t) => t.events.some((e) => ["clicked", "submitted"].includes(e.eventType))).length;
   const submittedCount = targets.filter((t) => t.events.some((e) => e.eventType === "submitted")).length;

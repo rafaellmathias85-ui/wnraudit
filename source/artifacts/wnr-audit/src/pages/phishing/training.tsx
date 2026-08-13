@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useSearch } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -142,9 +143,39 @@ function QuizSection({ questions, onComplete }: { questions: QuizQuestion[]; onC
   );
 }
 
+// Confirmation screen shown when user came via the report-email footer link
+function ReportedConfirmation({ employeeName }: { employeeName?: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background p-6">
+      <div className="max-w-md w-full text-center space-y-5">
+        <div className="text-7xl">✅</div>
+        <h1 className="text-2xl font-bold text-green-700">Reporte registrado com sucesso!</h1>
+        {employeeName && (
+          <p className="text-muted-foreground text-sm">Olá, {employeeName}</p>
+        )}
+        <p className="text-muted-foreground leading-relaxed">
+          Você identificou corretamente um <strong className="text-foreground">e-mail de phishing simulado</strong> e
+          tomou a ação correta reportando-o ao departamento de TI.
+        </p>
+        <p className="text-muted-foreground leading-relaxed">
+          Isso é exatamente o comportamento que esperamos. Parabéns pela atenção à segurança!
+        </p>
+        <div className="inline-flex items-center gap-2 bg-green-50 text-green-700 px-5 py-2.5 rounded-full text-sm font-semibold border border-green-200">
+          <ShieldCheck className="h-4 w-4" />
+          Ação correta registrada
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PhishingTraining({ token }: { token: string }) {
+  const search = useSearch();
+  const action = new URLSearchParams(search).get("action"); // "report" when from report-email link
+
   const [activeModuleIdx, setActiveModuleIdx] = useState(0);
   const [completedModules, setCompletedModules] = useState<Set<string>>(new Set());
+  const [reportDone, setReportDone] = useState(false);
 
   const { data, isLoading } = useQuery<TrainingData>({
     queryKey: ["phishing-training", token],
@@ -158,6 +189,39 @@ export default function PhishingTraining({ token }: { token: string }) {
         body: JSON.stringify({ employeeId: "anonymous", score }),
       }),
   });
+
+  // Fire events via POST (JavaScript-only — scanners cannot execute this)
+  useEffect(() => {
+    if (action === "report") {
+      // Came from the email footer "reportar" link → record opened + reported
+      fetch(`/api/phishing/track/${token}/report`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      })
+        .then(() => setReportDone(true))
+        .catch(() => setReportDone(true));
+    } else {
+      // Came from the phishing link button → record opened + clicked
+      fetch(`/api/phishing/track/${token}/arrived`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      }).catch(() => {});
+    }
+  }, [token, action]);
+
+  // Show report confirmation screen (with loading state while POST fires)
+  if (action === "report") {
+    if (!reportDone || isLoading) {
+      return (
+        <div className="min-h-screen flex items-center justify-center p-6">
+          <Skeleton className="h-64 w-full max-w-md" />
+        </div>
+      );
+    }
+    return <ReportedConfirmation employeeName={data?.employeeName} />;
+  }
 
   if (isLoading) {
     return (

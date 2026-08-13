@@ -1090,6 +1090,7 @@ async function recordEvent(
   token: string,
   eventType: "opened" | "clicked" | "submitted" | "reported",
   metadata?: Record<string, unknown>,
+  skipBotCheck = false,
 ) {
   const [target] = await db
     .select()
@@ -1098,12 +1099,31 @@ async function recordEvent(
     .limit(1);
   if (!target) return null;
 
-  // Bot/scanner detection: Microsoft Safe Links and Google Safe Browsing scan within
-  // 5-15 s of delivery. Drop open/click events that arrive within 20 s of sentAt.
-  if (target.sentAt && (eventType === "opened" || eventType === "clicked")) {
-    const msSinceSent = Date.now() - new Date(target.sentAt).getTime();
-    if (msSinceSent < 20_000) {
-      logger.info({ token, eventType, msSinceSent }, "Event ignored: automated scanner (within 20s of delivery)");
+  // Bot/scanner detection — only for events from email (GET requests from email clients/scanners).
+  // Events fired by the training SPA (POST from useEffect) always set skipBotCheck=true because
+  // JavaScript execution is required — automated scanners cannot trigger those paths.
+  if (!skipBotCheck) {
+    const rawUA = (metadata?.ua as string | undefined) ?? "";
+    const ua = rawUA.toLowerCase();
+
+    // UA patterns of known security scanners
+    const SCANNER_PATTERNS = [
+      "microsoft", "msoffice", "ms-office", "msnbot", "bingpreview",
+      "python-requests", "python/", "curl/", "wget/",
+      "go-http-client", "java/", "okhttp/", "libwww-perl",
+      "axios/", "headlesschrome", "phantomjs", "slurp",
+    ];
+    const isKnownScanner = SCANNER_PATTERNS.some((p) => ua.includes(p));
+    const msSinceSent = target.sentAt
+      ? Date.now() - new Date(target.sentAt).getTime()
+      : Infinity;
+    const isTooFast = msSinceSent < 10_000;
+
+    if (isKnownScanner || isTooFast) {
+      logger.info(
+        { token, eventType, ua: rawUA, msSinceSent, isKnownScanner, isTooFast },
+        "Event ignored: likely automated scanner",
+      );
       return target;
     }
   }
@@ -1145,44 +1165,36 @@ router.get("/phishing/track/:token/open", async (req, res): Promise<void> => {
   res.send(gif);
 });
 
-// Tracking click — redirect to training
+// Tracking click — redirect to training SPA.
+// Events (opened + clicked) are recorded by the SPA's useEffect via POST /arrived.
+// Scanners follow this redirect but cannot execute JavaScript, so they never trigger /arrived.
 router.get("/phishing/track/:token/click", async (req, res): Promise<void> => {
-  const token = req.params.token as string;
-  // Clicking the phishing link implies the email was opened — record both
-  await recordEvent(token, "opened",  { ip: req.ip, ua: req.headers["user-agent"], via: "click" }).catch(() => {});
-  await recordEvent(token, "clicked", { ip: req.ip, ua: req.headers["user-agent"] }).catch(
-    () => {},
-  );
-  const basePath =
-    process.env.BASE_PATH ?? "/wnraudit/";
-  res.redirect(302, `${basePath}phishing/training/${token}`);
+  const basePath = process.env.BASE_PATH ?? "/wnraudit/app/";
+  res.redirect(302, `${basePath}phishing/training/${encodeURIComponent(req.params.token as string)}`);
 });
 
-// Report as phishing via email link (GET — opens HTML confirmation page)
+// Training SPA arrived — records opened + clicked (JS-only, scanner-proof)
+router.post("/phishing/track/:token/arrived", async (req, res): Promise<void> => {
+  const token = req.params.token as string;
+  await recordEvent(token, "opened",  { ip: req.ip, via: "training-spa" }, true).catch(() => {});
+  await recordEvent(token, "clicked", { ip: req.ip, via: "training-spa" }, true).catch(() => {});
+  res.json({ ok: true });
+});
+
+// Report as phishing via email link — redirects to training SPA with action=report.
+// Events (opened + reported) are recorded by the SPA's useEffect via POST /report.
+// Scanners follow this redirect but cannot execute JavaScript, so no false events.
 router.get("/phishing/track/:token/report-email", async (req, res): Promise<void> => {
-  const token = req.params.token as string;
-  // Clicking the report footer link implies the email was opened — record both
-  await recordEvent(token, "opened",   { ip: req.ip, ua: req.headers["user-agent"], via: "report-email" }).catch(() => {});
-  await recordEvent(token, "reported", { ip: req.ip, ua: req.headers["user-agent"], via: "email-link" }).catch(() => {});
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte registrado</title>
-<style>body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
-.card{background:#fff;border-radius:12px;padding:40px 48px;text-align:center;max-width:480px;box-shadow:0 2px 16px rgba(0,0,0,.1)}
-.icon{font-size:56px;margin-bottom:16px}.title{color:#2e7d32;font-size:22px;font-weight:bold;margin-bottom:12px}
-p{color:#555;line-height:1.6;margin:0}.badge{display:inline-block;background:#e8f5e9;color:#2e7d32;padding:6px 16px;border-radius:20px;font-size:13px;margin-top:20px}</style>
-</head><body><div class="card">
-<div class="icon">✅</div>
-<div class="title">Reporte registrado com sucesso!</div>
-<p>Você identificou corretamente um <strong>e-mail de phishing simulado</strong> e tomou a ação correta reportando-o ao departamento de TI.</p>
-<p style="margin-top:14px">Isso é exatamente o comportamento que esperamos. Parabéns pela atenção à segurança!</p>
-<span class="badge">🛡️ Ação correta registrada</span>
-</div></body></html>`);
+  const basePath = process.env.BASE_PATH ?? "/wnraudit/app/";
+  res.redirect(302, `${basePath}phishing/training/${encodeURIComponent(req.params.token as string)}?action=report`);
 });
 
-// Report as phishing (API — JSON response for frontend use)
+// Report as phishing (called from training SPA — JS required, scanner-proof)
 router.post("/phishing/track/:token/report", async (req, res): Promise<void> => {
   const token = req.params.token as string;
-  await recordEvent(token, "reported", { ip: req.ip }).catch(() => {});
+  // Reaching this endpoint from the SPA means the email was opened — record both
+  await recordEvent(token, "opened",   { ip: req.ip, via: "training-spa" }, true).catch(() => {});
+  await recordEvent(token, "reported", { ip: req.ip, via: "training-spa" }, true).catch(() => {});
   res.json({ message: "Obrigado por reportar. Isso é exatamente o que esperamos de você!" });
 });
 
