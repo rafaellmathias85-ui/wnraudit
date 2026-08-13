@@ -159,8 +159,10 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
 
   const targets = campaign.targets ?? [];
   const sentCount = targets.filter((t) => t.sentAt).length;
-  const openedCount = targets.filter((t) => t.events.some((e) => e.eventType === "opened")).length;
-  const clickedCount = targets.filter((t) => t.events.some((e) => e.eventType === "clicked")).length;
+  // "opened" = pixel loaded OR clicked/submitted — clicking implies the email was opened
+  const openedCount = targets.filter((t) => t.events.some((e) => ["opened", "clicked", "submitted"].includes(e.eventType))).length;
+  // "clicked" = clicked OR submitted — submitting credentials implies having clicked
+  const clickedCount = targets.filter((t) => t.events.some((e) => ["clicked", "submitted"].includes(e.eventType))).length;
   const submittedCount = targets.filter((t) => t.events.some((e) => e.eventType === "submitted")).length;
   const reportedCount = targets.filter((t) => t.events.some((e) => e.eventType === "reported")).length;
 

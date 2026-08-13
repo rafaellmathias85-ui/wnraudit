@@ -905,8 +905,15 @@ router.get(
 
     const total   = targets.length;
     const sent    = targets.filter((t) => t.sentAt).length;
-    const opened  = targets.filter((t) => eventsByTarget.get(t.id)?.has("opened")).length;
-    const clicked = targets.filter((t) => eventsByTarget.get(t.id)?.has("clicked")).length;
+    // "opened" = pixel loaded OR clicked/submitted (clicking implies having opened the email)
+    const opened  = targets.filter((t) => {
+      const evs = eventsByTarget.get(t.id);
+      return evs?.has("opened") || evs?.has("clicked") || evs?.has("submitted");
+    }).length;
+    const clicked = targets.filter((t) => {
+      const evs = eventsByTarget.get(t.id);
+      return evs?.has("clicked") || evs?.has("submitted");
+    }).length;
     const submitted = targets.filter((t) => eventsByTarget.get(t.id)?.has("submitted")).length;
     const reported  = targets.filter((t) => eventsByTarget.get(t.id)?.has("reported")).length;
 
