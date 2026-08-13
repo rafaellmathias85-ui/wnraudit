@@ -24,6 +24,18 @@ router.get("/external-assets", requireAuth, async (req, res): Promise<void> => {
   res.json(schemas.ListExternalAssetsResponse.parse(rows));
 });
 
+function normalizeHost(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.includes("://")) {
+    try {
+      return new URL(trimmed).hostname;
+    } catch {
+      // fall through to return as-is
+    }
+  }
+  return trimmed.replace(/\/.*$/, "").replace(/:(\d+)$/, "").toLowerCase();
+}
+
 router.post(
   "/external-assets",
   requireAuth,
@@ -40,7 +52,7 @@ router.post(
         customerId: customer.id,
         name: parsed.data.name,
         kind: parsed.data.kind,
-        host: parsed.data.host,
+        host: normalizeHost(parsed.data.host),
         port: parsed.data.port ?? null,
         notes: parsed.data.notes ?? null,
       })
@@ -385,6 +397,20 @@ router.get(
         detail: hasPrefix("EXT.AUTH.") ? "CRÍTICO — acesso obtido com credenciais padrão" : "17 pares de credenciais testados no FTP (se aberto) e HTTP Basic Auth — nenhum acesso obtido",
         pass: !hasPrefix("EXT.AUTH."),
       },
+      {
+        label: "Supply Chain — SRI e Arquivos de Dependência",
+        detail: hasPrefix("EXT.SC.SRI.") || hasPrefix("EXT.SC.FILE")
+          ? `${findings.filter((f) => f.controlId.startsWith("EXT.SC.")).length} problema(s) de supply chain identificado(s)`
+          : "Scripts externos com SRI verificados; arquivos de dependência (package.json, composer.lock, etc.) não expostos",
+        pass: !hasPrefix("EXT.SC.SRI.") && !hasPrefix("EXT.SC.FILE"),
+      },
+      {
+        label: "Formulário de Login — CSRF, SQLi e Credenciais Padrão",
+        detail: hasPrefix("EXT.LOGIN.")
+          ? `${findings.filter((f) => f.controlId.startsWith("EXT.LOGIN.")).length} problema(s) no formulário de login detectado(s)`
+          : "Formulários de login verificados: CSRF token, SQLi e credenciais padrão — sem problemas detectados",
+        pass: !hasPrefix("EXT.LOGIN."),
+      },
     ];
 
     const checklistHtml = checklist.map((row) => {
@@ -602,6 +628,8 @@ Responda EXATAMENTE neste formato:
         <tr><td><strong>SQL Injection (ativo)</strong></td><td>A.8.29 — Testes de Segurança</td><td>8 parâmetros de URL × 3 payloads testados com detecção por resposta de erro do banco de dados</td></tr>
         <tr><td><strong>XSS Refletido (ativo)</strong></td><td>A.8.29 — Testes de Segurança</td><td>10 parâmetros × 3 payloads XSS testados com detecção por reflexo não codificado no HTML</td></tr>
         <tr><td><strong>Credenciais Padrão (ativo)</strong></td><td>A.8.5 — Autenticação Segura</td><td>5 pares FTP + 17 pares HTTP Basic Auth testados contra credenciais de dicionário comuns</td></tr>
+        <tr><td><strong>Supply Chain — SRI (ativo)</strong></td><td>A.15.2 — Gestão de Serviços de Fornecedores</td><td>Scripts e stylesheets externos verificados quanto à ausência de Subresource Integrity (SRI); 15 tipos de arquivos de dependência verificados (package.json, composer.lock, .npmrc, etc.)</td></tr>
+        <tr><td><strong>Formulário de Login (ativo)</strong></td><td>A.8.5 + A.8.29 — Autenticação e Testes</td><td>Formulários de login detectados automaticamente; testados para token CSRF ausente, SQL Injection no campo de usuário e 15 pares de credenciais padrão</td></tr>
       </tbody>
     </table>
     <p style="font-size:11px;color:#6b7280;font-style:italic">Esta avaliação suporta os requisitos da cláusula 9.1 (Monitoramento e Medição) e 10.1 (Melhoria Contínua) da ISO/IEC 27001:2022.</p>

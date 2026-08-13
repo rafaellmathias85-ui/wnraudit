@@ -13,8 +13,9 @@ if (rawPort && (Number.isNaN(port) || port <= 0)) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-// BASE_PATH: padrão /wnraudit/ para builds de produção no VPS
-const basePath = process.env.BASE_PATH ?? "/wnraudit/";
+// BASE_PATH: must be set explicitly when building (process.env is NOT read from .env by Vite config)
+// On VPS: BASE_PATH=/wnraudit/app/ pnpm --filter @workspace/wnr-audit build
+const basePath = process.env.BASE_PATH ?? "/wnraudit/app/";
 
 const replitPlugins =
   !isProduction && isReplit

@@ -57,6 +57,7 @@ type Employee = {
   email: string;
   department: string | null;
   tenantId: string | null;
+  tenantDisplayName: string | null;
 };
 type Template = { id: string; name: string; subject: string };
 
@@ -85,10 +86,19 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [isDispatchOpen, setIsDispatchOpen] = useState(false);
   const [dispatchTemplateId, setDispatchTemplateId] = useState<string>("");
+  const [filterTenantId, setFilterTenantId] = useState<string>("all");
 
   const { data: campaign, isLoading } = useQuery<Campaign>({
     queryKey: ["phishing-campaign", campaignId],
     queryFn: () => apiFetch(`/phishing/campaigns/${campaignId}`),
+    // Poll while campaign is active and emails are still being dispatched
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      if (data.status !== "active") return false;
+      const allSent = data.targets.length > 0 && data.targets.every((t) => t.sentAt);
+      return allSent ? false : 3_000;
+    },
   });
 
   const { data: employees = [] } = useQuery<Employee[]>({
@@ -113,10 +123,6 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
       queryClient.invalidateQueries({ queryKey: ["phishing-campaign", campaignId] });
       setIsDispatchOpen(false);
       toast({ title: "Campanha disparada", description: "E-mails sendo enviados em segundo plano." });
-      // Refresh after background sending completes (~10s)
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ["phishing-campaign", campaignId] });
-      }, 10_000);
     },
     onError: (e: Error) => toast({ variant: "destructive", title: "Erro ao disparar", description: e.message }),
   });
@@ -167,10 +173,23 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
   const reportedCount = targets.filter((t) => t.events.some((e) => e.eventType === "reported")).length;
 
   const existingEmployeeIds = new Set(targets.map((t) => t.employeeId));
+
+  // Unique tenants from employees list for the filter dropdown
+  const tenantOptions = Array.from(
+    new Map(
+      employees
+        .filter((e) => e.tenantId && e.tenantDisplayName)
+        .map((e) => [e.tenantId!, { id: e.tenantId!, name: e.tenantDisplayName! }]),
+    ).values(),
+  ).sort((a, b) => a.name.localeCompare(b.name));
+
   const availableEmployees = employees.filter((e) => {
     if (existingEmployeeIds.has(e.id)) return false;
-    // If campaign is scoped to a tenant, only show employees from that tenant (or unscoped employees)
+    // If campaign is scoped to a tenant, respect that scope
     if (campaign.tenantId && e.tenantId && e.tenantId !== campaign.tenantId) return false;
+    // Apply the user's tenant filter selection
+    if (filterTenantId === "none") return !e.tenantId;
+    if (filterTenantId !== "all") return e.tenantId === filterTenantId;
     return true;
   });
 
@@ -198,7 +217,13 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
           {campaign.status === "draft" && (
             <>
               {/* Add targets dialog */}
-              <Dialog open={isAddTargetsOpen} onOpenChange={setIsAddTargetsOpen}>
+              <Dialog
+                open={isAddTargetsOpen}
+                onOpenChange={(open) => {
+                  setIsAddTargetsOpen(open);
+                  if (!open) { setSelectedEmployees([]); setFilterTenantId("all"); }
+                }}
+              >
                 <DialogTrigger asChild>
                   <Button variant="outline" className="gap-2">
                     <Plus className="h-4 w-4" />
@@ -209,15 +234,41 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
                   <DialogHeader>
                     <DialogTitle>Selecionar Funcionários</DialogTitle>
                   </DialogHeader>
+
+                  {/* Client filter — only shown when campaign has no fixed tenant scope */}
+                  {!campaign.tenantId && tenantOptions.length > 0 && (
+                    <div className="px-1">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Filtrar por cliente</Label>
+                      <Select value={filterTenantId} onValueChange={(v) => { setFilterTenantId(v); setSelectedEmployees([]); }}>
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue placeholder="Todos os clientes" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Todos os clientes</SelectItem>
+                          {tenantOptions.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                              <span className="flex items-center gap-1.5">
+                                <Building2 className="h-3 w-3 text-muted-foreground" />
+                                {t.name}
+                              </span>
+                            </SelectItem>
+                          ))}
+                          <SelectItem value="none">Sem cliente</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
                   {campaign.tenantDisplayName && (
                     <p className="text-xs text-muted-foreground px-1">
-                      Mostrando funcionários de <strong>{campaign.tenantDisplayName}</strong> e sem cliente associado.
+                      Mostrando funcionários de <strong>{campaign.tenantDisplayName}</strong>.
                     </p>
                   )}
-                  <div className="max-h-72 overflow-y-auto space-y-2 py-4">
+
+                  <div className="max-h-72 overflow-y-auto space-y-2 py-2">
                     {availableEmployees.length === 0 ? (
                       <p className="text-muted-foreground text-sm text-center py-6">
-                        Todos os funcionários já foram adicionados ou não há funcionários cadastrados.
+                        Nenhum funcionário disponível para este filtro.
                         <Link href="/phishing/employees"><Button variant="link" size="sm">Cadastrar funcionários</Button></Link>
                       </p>
                     ) : (
@@ -232,9 +283,14 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
                               )
                             }
                           />
-                          <div>
+                          <div className="flex-1 min-w-0">
                             <div className="text-sm font-medium">{e.name}</div>
-                            <div className="text-xs text-muted-foreground">{e.email}{e.department ? ` · ${e.department}` : ""}</div>
+                            <div className="text-xs text-muted-foreground truncate">
+                              {e.email}{e.department ? ` · ${e.department}` : ""}
+                              {e.tenantDisplayName && filterTenantId === "all" && (
+                                <span className="ml-1 text-muted-foreground/60">· {e.tenantDisplayName}</span>
+                              )}
+                            </div>
                           </div>
                         </label>
                       ))
