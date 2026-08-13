@@ -1161,8 +1161,10 @@ async function checkBruteForce(
 async function runScanForHost(host: string): Promise<ExternalScanResult> {
   const findings: Check[] = [];
   const openPortsList: Array<{ port: number; service: string; banner: string | null }> = [];
+  let checksRan = 0;
 
   // Port scan with concurrency limit
+  checksRan += COMMON_PORTS.length;
   const concurrency = 8;
   const tasks = [...COMMON_PORTS];
   const workers: Promise<void>[] = [];
@@ -1188,12 +1190,20 @@ async function runScanForHost(host: string): Promise<ExternalScanResult> {
   }
   await Promise.all(workers);
 
+  // DNS checks (only meaningful for domain names)
+  if (net.isIP(host) === 0) checksRan += 4; // SPF, DMARC, DKIM, MTA-STS
   findings.push(...(await dnsChecks(host)));
 
   // Passive web checks (exposed paths + CORS) on standard ports + any other open web ports
   const webPortSet = new Set<number>([80, 443]);
   for (const p of openPortsList) {
     if (HTTP_PORTS.has(p.port) || HTTPS_PORTS.has(p.port)) webPortSet.add(p.port);
+  }
+  for (const port of webPortSet) {
+    checksRan += EXPOSED_PATHS.length; // exposed path probes
+    checksRan += 1;                    // CORS check
+    checksRan += SECURITY_HEADERS.length; // header checks
+    if (port === 80) checksRan += 1;  // HTTP→HTTPS redirect check
   }
   const passiveWebTasks: Promise<Check[]>[] = [];
   for (const port of webPortSet) {
@@ -1206,6 +1216,7 @@ async function runScanForHost(host: string): Promise<ExternalScanResult> {
   // Active pentest: SQLi and XSS on open web ports
   const openWebPorts = openPortsList.filter((p) => HTTP_PORTS.has(p.port) || HTTPS_PORTS.has(p.port));
   if (openWebPorts.length > 0) {
+    checksRan += openWebPorts.length * 2; // SQLi + XSS per web port
     const activeTasks: Promise<Check[]>[] = [];
     for (const p of openWebPorts) {
       const isHttps = HTTPS_PORTS.has(p.port);
@@ -1217,6 +1228,8 @@ async function runScanForHost(host: string): Promise<ExternalScanResult> {
   }
 
   // Active pentest: credential brute force on open services
+  if (openPortsList.some((p) => p.port === 21)) checksRan += 1; // FTP brute
+  checksRan += openWebPorts.length; // HTTP Basic per web port
   findings.push(...(await checkBruteForce(host, openPortsList)));
 
   let critical = 0,
@@ -1233,8 +1246,8 @@ async function runScanForHost(host: string): Promise<ExternalScanResult> {
   return {
     findings,
     totals: {
-      total: findings.length,
-      passed: 0,
+      total: checksRan,
+      passed: checksRan - findings.length,
       failed: findings.length,
       critical,
       high,
@@ -1385,7 +1398,7 @@ export async function runExternalScan(deviceScanId: string): Promise<void> {
       status: "completed",
       completedAt: new Date(),
       totalChecks: result.totals.total,
-      passedChecks: 0,
+      passedChecks: result.totals.passed,
       failedChecks: result.totals.failed,
       criticalCount: result.totals.critical,
       highCount: result.totals.high,

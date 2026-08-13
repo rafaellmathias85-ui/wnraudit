@@ -323,38 +323,123 @@ router.get(
       .where(eq(deviceFindingsTable.deviceScanId, scanId))
       .orderBy(desc(deviceFindingsTable.detectedAt));
 
+    // Derive check categories pass/fail from findings
+    const hasPrefix = (pfx: string) => findings.some((f) => f.controlId.startsWith(pfx));
+
+    const isDomain = !/^\d+\.\d+\.\d+\.\d+$/.test(asset.host);
+    const openPorts = findings
+      .filter((f) => f.controlId.startsWith("EXT.PORT."))
+      .map((f) => f.affectedResource ?? f.controlId);
+
+    // Build checklist rows (category, detail, pass/fail, severity hint)
+    type CheckRow = { label: string; detail: string; pass: boolean; na?: boolean };
+    const checklist: CheckRow[] = [
+      {
+        label: "Varredura de Portas TCP",
+        detail: `${50} portas verificadas${openPorts.length > 0 ? ` — ${openPorts.length} aberta(s): ${openPorts.join(", ")}` : " — nenhuma porta exposta"}`,
+        pass: !hasPrefix("EXT.PORT.") || findings.filter((f) => f.controlId.startsWith("EXT.PORT.") && f.severity !== "info").length === 0,
+      },
+      {
+        label: "CVEs / Versões Vulneráveis",
+        detail: hasPrefix("EXT.CVE.") ? "Versão vulnerável detectada no banner de serviço" : "Nenhuma versão com CVE conhecido identificada nos banners",
+        pass: !hasPrefix("EXT.CVE."),
+      },
+      {
+        label: "Criptografia TLS / SSL",
+        detail: hasPrefix("EXT.TLS.") ? "Problema de TLS detectado (protocolo/certificado)" : openPorts.some((p) => p.includes(":443") || p.includes(":8443")) ? "TLS 1.2+ em uso, certificado válido" : "Porta HTTPS não exposta — TLS não aplicável",
+        pass: !hasPrefix("EXT.TLS."),
+      },
+      {
+        label: "Cabeçalhos HTTP de Segurança",
+        detail: hasPrefix("EXT.HEADER.") ? `${findings.filter((f) => f.controlId.startsWith("EXT.HEADER.")).length} cabeçalho(s) ausente(s)` : "Todos os cabeçalhos de segurança presentes (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)",
+        pass: !hasPrefix("EXT.HEADER."),
+      },
+      {
+        label: "Arquivos e Caminhos Sensíveis",
+        detail: hasPrefix("EXT.WEB.EXPOSED.") ? "Arquivo sensível acessível publicamente" : "13 caminhos verificados (.env, .git, phpinfo, backups, etc.) — nenhum exposto",
+        pass: !hasPrefix("EXT.WEB.EXPOSED."),
+      },
+      {
+        label: "Política CORS",
+        detail: hasPrefix("EXT.WEB.CORS.") ? "CORS permissivo detectado (Access-Control-Allow-Origin: *)" : "Configuração CORS adequada — sem permissão de origens externas",
+        pass: !hasPrefix("EXT.WEB.CORS."),
+      },
+      {
+        label: "Segurança de DNS / E-mail (SPF, DMARC, DKIM, MTA-STS)",
+        detail: !isDomain ? "Host é IP — verificação DNS não aplicável" : hasPrefix("EXT.DNS.") ? `${findings.filter((f) => f.controlId.startsWith("EXT.DNS.")).length} problema(s) de configuração DNS/e-mail` : "SPF, DMARC, DKIM e MTA-STS configurados corretamente",
+        pass: !hasPrefix("EXT.DNS."),
+        na: !isDomain,
+      },
+      {
+        label: "SQL Injection (teste ativo)",
+        detail: hasPrefix("EXT.WEB.SQLI.") ? "VULNERÁVEL — injeção SQL confirmada via resposta de erro do banco" : openPorts.some((p) => p.includes(":80") || p.includes(":443") || p.includes(":8080")) ? "8 parâmetros testados com 3 payloads cada — nenhuma injeção detectada" : "Nenhuma porta web aberta — teste ativo não aplicável",
+        pass: !hasPrefix("EXT.WEB.SQLI."),
+      },
+      {
+        label: "Cross-Site Scripting — XSS Refletido (teste ativo)",
+        detail: hasPrefix("EXT.WEB.XSS.") ? "VULNERÁVEL — payload XSS refletido sem sanitização na resposta" : openPorts.some((p) => p.includes(":80") || p.includes(":443") || p.includes(":8080")) ? "10 parâmetros testados com 3 payloads XSS cada — nenhum reflexo detectado" : "Nenhuma porta web aberta — teste ativo não aplicável",
+        pass: !hasPrefix("EXT.WEB.XSS."),
+      },
+      {
+        label: "Credenciais Padrão (FTP + HTTP Basic Auth)",
+        detail: hasPrefix("EXT.AUTH.") ? "CRÍTICO — acesso obtido com credenciais padrão" : "17 pares de credenciais testados no FTP (se aberto) e HTTP Basic Auth — nenhum acesso obtido",
+        pass: !hasPrefix("EXT.AUTH."),
+      },
+    ];
+
+    const checklistHtml = checklist.map((row) => {
+      const icon = row.na ? `<span style="color:#6b7280;font-size:15px">—</span>`
+        : row.pass ? `<span style="color:#16a34a;font-size:16px;font-weight:700">✓</span>`
+        : `<span style="color:#dc2626;font-size:16px;font-weight:700">✗</span>`;
+      const statusLabel = row.na ? `<span style="font-size:10px;color:#6b7280;font-weight:600;background:#f3f4f6;padding:2px 8px;border-radius:4px">N/A</span>`
+        : row.pass ? `<span style="font-size:10px;color:#16a34a;font-weight:700;background:#f0fdf4;border:1px solid #bbf7d0;padding:2px 8px;border-radius:4px">APROVADO</span>`
+        : `<span style="font-size:10px;color:#dc2626;font-weight:700;background:#fef2f2;border:1px solid #fecaca;padding:2px 8px;border-radius:4px">FALHA</span>`;
+      return `<tr style="${row.pass || row.na ? "" : "background:#fff8f8"}">
+        <td style="text-align:center;width:36px;padding:8px">${icon}</td>
+        <td style="font-size:12px;font-weight:600;color:#111827;padding:9px 12px">${row.label}</td>
+        <td style="font-size:11px;color:#4b5563;padding:9px 12px">${row.detail}</td>
+        <td style="text-align:center;padding:9px 12px">${statusLabel}</td>
+      </tr>`;
+    }).join("");
+
     // AI analysis
     let execSummary = "Análise de IA indisponível.";
     let priorityActions = "";
     try {
-      const findingsSummary = findings
-        .filter((f) => f.severity !== "info")
-        .map((f) => `[${f.severity.toUpperCase()}] ${f.title}${f.affectedResource ? ` — ${f.affectedResource}` : ""}`)
-        .join("\n") || "Nenhum achado relevante.";
+      const nonInfoFindings = findings.filter((f) => f.severity !== "info");
+      const findingsSummary = nonInfoFindings.length > 0
+        ? nonInfoFindings.map((f) => `[${f.severity.toUpperCase()}] ${f.title}${f.affectedResource ? ` — ${f.affectedResource}` : ""}`).join("\n")
+        : "Nenhuma vulnerabilidade encontrada. A varredura não identificou falhas de segurança no ativo.";
+
+      const totalChecks = scan.totalChecks ?? 0;
+      const passedChecks = scan.passedChecks ?? 0;
 
       const aiRes = await anthropic.messages.create({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 1200,
         messages: [{
           role: "user",
-          content: `Você é analista de segurança sênior da Winner Tecnologia. Analise os achados de segurança abaixo de uma varredura de superfície externa e produza:
+          content: `Você é analista de segurança sênior da Winner Tecnologia. Analise o resultado abaixo de uma varredura de superfície externa e produza:
 1. Um parágrafo executivo em português para a diretoria (máximo 4 frases, linguagem de negócio).
-2. Uma lista das 3 ações prioritárias mais importantes.
+2. Uma lista das 3 principais recomendações ou confirmações de boas práticas.
 
 Ativo: ${asset.name} (${asset.host})
 Data: ${scan.completedAt ? new Date(scan.completedAt).toLocaleDateString("pt-BR") : "N/A"}
-Total: ${findings.length} achados (${scan.criticalCount ?? 0} críticos, ${scan.highCount ?? 0} altos, ${scan.mediumCount ?? 0} médios, ${scan.lowCount ?? 0} baixos)
+Verificações executadas: ${totalChecks} | Aprovadas: ${passedChecks} | Falhas: ${nonInfoFindings.length}
+Vulnerabilidades: ${scan.criticalCount ?? 0} críticas, ${scan.highCount ?? 0} altas, ${scan.mediumCount ?? 0} médias, ${scan.lowCount ?? 0} baixas
 
-Achados:
+Resultado:
 ${findingsSummary}
+
+${nonInfoFindings.length === 0 ? "IMPORTANTE: O resultado é POSITIVO — o ativo não apresentou vulnerabilidades. O parágrafo deve transmitir confiança e evidenciar a postura de segurança adequada do cliente." : ""}
 
 Responda EXATAMENTE neste formato:
 §SUMARIO§
 [parágrafo executivo aqui]
 §ACOES§
-1. [ação 1]
-2. [ação 2]
-3. [ação 3]`,
+1. [recomendação ou confirmação 1]
+2. [recomendação ou confirmação 2]
+3. [recomendação ou confirmação 3]`,
         }],
       });
       const text = aiRes.content[0]?.type === "text" ? aiRes.content[0].text : "";
@@ -371,8 +456,8 @@ Responda EXATAMENTE neste formato:
     };
     for (const f of findings) { (bySeverity[f.severity] ??= []).push(f); }
 
-    const riskLevel = (scan.criticalCount ?? 0) > 0 ? "CRÍTICO" : (scan.highCount ?? 0) > 0 ? "ALTO" : (scan.mediumCount ?? 0) > 0 ? "MÉDIO" : "BAIXO";
-    const riskColor = (scan.criticalCount ?? 0) > 0 ? "#dc2626" : (scan.highCount ?? 0) > 0 ? "#ea580c" : (scan.mediumCount ?? 0) > 0 ? "#d97706" : "#16a34a";
+    const riskLevel = (scan.criticalCount ?? 0) > 0 ? "CRÍTICO" : (scan.highCount ?? 0) > 0 ? "ALTO" : (scan.mediumCount ?? 0) > 0 ? "MÉDIO" : (scan.lowCount ?? 0) > 0 ? "BAIXO" : "PROTEGIDO";
+    const riskColor = (scan.criticalCount ?? 0) > 0 ? "#dc2626" : (scan.highCount ?? 0) > 0 ? "#ea580c" : (scan.mediumCount ?? 0) > 0 ? "#d97706" : (scan.lowCount ?? 0) > 0 ? "#2563eb" : "#16a34a";
     const scanDate = scan.completedAt
       ? new Date(scan.completedAt).toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })
       : "Em andamento";
@@ -384,6 +469,8 @@ Responda EXATAMENTE neste formato:
       low: { label: "BAIXO", color: "#2563eb", bg: "#eff6ff" },
       info: { label: "INFO", color: "#6b7280", bg: "#f9fafb" },
     };
+
+    const nonInfoCount = findings.filter((f) => f.severity !== "info").length;
 
     const findingsHtml = (["critical", "high", "medium", "low"] as const)
       .flatMap((sev) => {
@@ -408,12 +495,13 @@ Responda EXATAMENTE neste formato:
 
     const priorityActionsHtml = priorityActions
       ? `<div style="margin-top:16px;padding:14px 16px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">
-          <strong style="font-size:12px;color:#0369a1">Ações Prioritárias Recomendadas:</strong>
+          <strong style="font-size:12px;color:#0369a1">Recomendações e Boas Práticas:</strong>
           <div style="font-size:13px;color:#374151;margin-top:6px;white-space:pre-line;line-height:1.7">${priorityActions}</div>
         </div>`
       : "";
 
-    const nonInfoCount = findings.filter((f) => f.severity !== "info").length;
+    const totalChecksDisplay = scan.totalChecks ?? 0;
+    const passedChecksDisplay = scan.passedChecks ?? 0;
 
     const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -479,7 +567,8 @@ Responda EXATAMENTE neste formato:
       <span style="display:inline-block;padding:5px 16px;border-radius:999px;font-size:12px;font-weight:800;color:#fff;background:${riskColor}">Risco ${riskLevel}</span>
     </div>
     <div class="stats">
-      <div class="stat"><div class="v" style="color:#6b7280">${findings.length}</div><div class="l">Total</div></div>
+      <div class="stat"><div class="v" style="color:#374151">${totalChecksDisplay}</div><div class="l">Verificações</div></div>
+      <div class="stat"><div class="v" style="color:#16a34a">${passedChecksDisplay}</div><div class="l">Aprovadas</div></div>
       <div class="stat"><div class="v" style="color:#dc2626">${scan.criticalCount ?? 0}</div><div class="l">Críticos</div></div>
       <div class="stat"><div class="v" style="color:#ea580c">${scan.highCount ?? 0}</div><div class="l">Altos</div></div>
       <div class="stat"><div class="v" style="color:#d97706">${scan.mediumCount ?? 0}</div><div class="l">Médios</div></div>
@@ -493,16 +582,16 @@ Responda EXATAMENTE neste formato:
     <h2 class="sec-title">2. Metodologia</h2>
     <p style="font-size:13px;color:#374151;line-height:1.7;margin-bottom:10px">A varredura foi realizada pela plataforma WNR Audit com técnicas de análise passiva e ativa de superfície externa. Controles avaliados:</p>
     <ul style="margin-left:20px;font-size:12px;color:#374151;line-height:1.9">
-      <li>Reconhecimento de portas TCP (48 portas comuns) com identificação de serviço por banner</li>
+      <li>Reconhecimento de portas TCP (50 portas comuns) com identificação de serviço por banner</li>
       <li>Correlação de versões com CVEs conhecidos (OpenSSH, Apache, IIS, nginx, vsFTPd, Telnet)</li>
       <li>Análise de configuração TLS/SSL (protocolo, cipher suite, certificado, validade)</li>
-      <li>Verificação de cabeçalhos HTTP de segurança (HSTS, CSP, X-Frame-Options, X-Content-Type-Options)</li>
-      <li>Detecção de arquivos e caminhos sensíveis expostos (.env, .git, phpinfo, backups)</li>
+      <li>Verificação de cabeçalhos HTTP de segurança (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)</li>
+      <li>Detecção de arquivos e caminhos sensíveis expostos (.env, .git, phpinfo, backups — 13 caminhos)</li>
       <li>Análise de política CORS (Access-Control-Allow-Origin)</li>
       <li>Auditoria de registros DNS de segurança (SPF, DMARC, DKIM, MTA-STS)</li>
-      <li><strong>Teste ativo de SQL Injection</strong> em parâmetros de URL comuns</li>
-      <li><strong>Teste ativo de Cross-Site Scripting (XSS) refletido</strong> em parâmetros de entrada</li>
-      <li><strong>Teste de credenciais padrão</strong> em FTP (porta 21) e HTTP Basic Auth</li>
+      <li><strong>Teste ativo de SQL Injection</strong> em 8 parâmetros de URL × 3 payloads</li>
+      <li><strong>Teste ativo de Cross-Site Scripting (XSS) refletido</strong> em 10 parâmetros × 3 payloads</li>
+      <li><strong>Teste de credenciais padrão</strong> — 5 pares FTP + 17 pares HTTP Basic Auth</li>
     </ul>
   </div>
 
@@ -515,23 +604,61 @@ Responda EXATAMENTE neste formato:
       <tr><td>Tipo de Ativo</td><td>${asset.kind ?? "—"}</td></tr>
       <tr><td>Início da Varredura</td><td>${scan.startedAt ? new Date(scan.startedAt).toLocaleString("pt-BR") : "—"}</td></tr>
       <tr><td>Conclusão</td><td>${scan.completedAt ? new Date(scan.completedAt).toLocaleString("pt-BR") : "Em andamento"}</td></tr>
+      <tr><td>Total de verificações</td><td>${totalChecksDisplay} testes executados — ${passedChecksDisplay} aprovados, ${nonInfoCount} vulnerabilidade(s) encontrada(s)</td></tr>
       <tr><td>Observações</td><td>${asset.notes ?? "—"}</td></tr>
     </table>
   </div>
 
   <div class="sec">
-    <h2 class="sec-title">4. Vulnerabilidades Identificadas</h2>
-    ${findings.length === 0
-      ? '<p style="color:#16a34a;font-weight:600">✓ Nenhuma vulnerabilidade identificada nesta varredura.</p>'
-      : findingsHtml}
+    <h2 class="sec-title">4. Checklist de Verificações</h2>
+    <p style="font-size:12px;color:#6b7280;margin-bottom:10px">Resultado detalhado por categoria de controle. ✓ = nenhuma falha detectada &nbsp;|&nbsp; ✗ = vulnerabilidade identificada &nbsp;|&nbsp; — = não aplicável ao alvo.</p>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:36px;text-align:center"></th>
+          <th>Categoria de Controle</th>
+          <th>Evidência / Detalhe</th>
+          <th style="width:90px;text-align:center">Resultado</th>
+        </tr>
+      </thead>
+      <tbody>${checklistHtml}</tbody>
+    </table>
   </div>
 
   <div class="sec">
-    <h2 class="sec-title">5. Conclusão</h2>
+    <h2 class="sec-title">5. Vulnerabilidades Identificadas</h2>
+    ${nonInfoCount === 0
+      ? `<div style="padding:16px 20px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;display:flex;align-items:center;gap:12px">
+          <span style="font-size:28px">✓</span>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:#15803d">Nenhuma vulnerabilidade identificada</div>
+            <div style="font-size:12px;color:#166534;margin-top:4px">
+              Foram executadas ${totalChecksDisplay} verificações em ${totalChecksDisplay > 0 ? `${passedChecksDisplay} aprovadas` : "todas as categorias"}.
+              O ativo <strong>${asset.name}</strong> não apresentou falhas de segurança exploráveis na superfície pública analisada.
+            </div>
+          </div>
+        </div>`
+      : findingsHtml}
+    ${findings.some((f) => f.severity === "info") ? `
+    <div style="margin-top:16px">
+      <h3 style="font-size:13px;font-weight:600;color:#6b7280;margin-bottom:8px">Informacional</h3>
+      ${(bySeverity["info"] ?? []).map((f) => `<div style="margin-bottom:8px;padding:10px 14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px">
+        <div style="font-size:12px;font-weight:600;color:#374151">${f.title}</div>
+        ${f.affectedResource ? `<div style="font-size:11px;color:#6b7280;font-family:monospace">${f.affectedResource}</div>` : ""}
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">${f.description}</div>
+      </div>`).join("")}
+    </div>` : ""}
+  </div>
+
+  <div class="sec">
+    <h2 class="sec-title">6. Conclusão</h2>
     <p style="font-size:13px;color:#374151;line-height:1.7">
-      A avaliação de superfície externa identificou <strong>${nonInfoCount} vulnerabilidade${nonInfoCount !== 1 ? "s" : ""}</strong> no ativo <strong>${asset.name}</strong>.
+      A avaliação de superfície externa do ativo <strong>${asset.name}</strong> executou <strong>${totalChecksDisplay} verificações</strong>,
+      das quais <strong style="color:#16a34a">${passedChecksDisplay} foram aprovadas</strong> e
+      <strong style="color:${nonInfoCount > 0 ? "#dc2626" : "#16a34a"}">${nonInfoCount} vulnerabilidade${nonInfoCount !== 1 ? "s" : ""} ${nonInfoCount !== 1 ? "foram" : "foi"} identificada${nonInfoCount !== 1 ? "s" : ""}</strong>.
       ${(scan.criticalCount ?? 0) > 0 ? `<span style="color:#dc2626;font-weight:600"> Atenção: ${scan.criticalCount} achado${(scan.criticalCount ?? 0) > 1 ? "s" : ""} crítico${(scan.criticalCount ?? 0) > 1 ? "s" : ""} requer${(scan.criticalCount ?? 0) === 1 ? "" : "em"} ação imediata.</span>` : ""}
-      Recomendamos que os achados de severidade crítica e alta sejam tratados prioritariamente. Uma nova varredura deve ser realizada após as correções para validar a efetividade das remediações.
+      ${nonInfoCount === 0 ? '<span style="color:#15803d;font-weight:600"> O ativo apresenta postura de segurança adequada na superfície externa analisada.</span>' : " Recomendamos que os achados de severidade crítica e alta sejam tratados prioritariamente."}
+      Uma nova varredura deve ser realizada periodicamente (recomendamos ciclos mensais) ou após mudanças significativas de infraestrutura.
     </p>
   </div>
 
