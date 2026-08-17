@@ -901,20 +901,24 @@ router.get(
       .where(inArray(phishingEventsTable.targetId, targets.map((t) => t.id)))
       .orderBy(phishingEventsTable.occurredAt);
 
-    // All events (detected — includes scanner/Safe Links signals).
+    // All events — includes scanner/Safe Links signals (used for "detected" metrics).
     const eventsByTarget = new Map<string, Set<string>>();
-    // Only human-confirmed events (humanVerified = true).
+    // Human-confirmed events only (humanVerified = true).
     const humanEventsByTarget = new Map<string, Set<string>>();
-    // Timestamp of the first HUMAN-confirmed action (click or credential submit).
+    // Timestamp of first human action (clicked, submitted, or reported).
     const actionAtByTarget = new Map<string, Date>();
+
     for (const e of events) {
       if (!eventsByTarget.has(e.targetId)) eventsByTarget.set(e.targetId, new Set());
       eventsByTarget.get(e.targetId)!.add(e.eventType);
-      if (e.humanVerified) {
+
+      // "reported" is trusted regardless of humanVerified — it requires explicit navigation + button
+      const trustAsHuman = e.humanVerified || e.eventType === "reported";
+      if (trustAsHuman) {
         if (!humanEventsByTarget.has(e.targetId)) humanEventsByTarget.set(e.targetId, new Set());
         humanEventsByTarget.get(e.targetId)!.add(e.eventType);
         if (
-          (e.eventType === "clicked" || e.eventType === "submitted") &&
+          (e.eventType === "clicked" || e.eventType === "submitted" || e.eventType === "reported") &&
           !actionAtByTarget.has(e.targetId) &&
           e.occurredAt
         ) {
@@ -923,268 +927,292 @@ router.get(
       }
     }
 
-    // Human-confirmed metrics — separate from the raw detected metrics above.
-    const humanClicked = targets.filter((t) => {
-      const evs = humanEventsByTarget.get(t.id);
-      return evs?.has("clicked") || evs?.has("submitted");
-    }).length;
+    // Human-confirmed risk metrics.
+    const humanClicked   = targets.filter((t) => { const evs = humanEventsByTarget.get(t.id); return evs?.has("clicked") || evs?.has("submitted"); }).length;
     const humanSubmitted = targets.filter((t) => humanEventsByTarget.get(t.id)?.has("submitted")).length;
+    const humanReported  = targets.filter((t) => humanEventsByTarget.get(t.id)?.has("reported")).length;
 
-    const getStatus = (evs: Set<string>) => {
-      if (evs.has("submitted")) return { label: "Submeteu credenciais", badge: "critical", color: "#c62828" };
-      if (evs.has("clicked"))   return { label: "Clicou no link",        badge: "high",     color: "#e65100" };
-      if (evs.has("opened"))    return { label: "Abriu o e-mail",        badge: "medium",   color: "#1565c0" };
-      if (evs.has("reported"))  return { label: "Reportou ao TI",        badge: "good",     color: "#2e7d32" };
-      if (evs.has("sent"))      return { label: "Enviado (não aberto)",  badge: "low",      color: "#555"    };
-      return                           { label: "Aguardando envio",      badge: "none",     color: "#999"    };
+    // Priority order (matches campaign-detail.tsx): submitted > clicked > reported > opened
+    const getStatus = (targetId: string) => {
+      const all   = eventsByTarget.get(targetId)   ?? new Set<string>();
+      const human = humanEventsByTarget.get(targetId) ?? new Set<string>();
+      if (human.has("submitted")) return { label: "Submeteu credenciais", color: "#c62828" };
+      if (human.has("clicked"))   return { label: "Clicou no link",        color: "#e65100" };
+      if (all.has("reported"))    return { label: "Reportou ao TI",        color: "#2e7d32" };
+      if (all.has("opened") || all.has("clicked") || all.has("submitted"))
+                                  return { label: "Abriu o e-mail",        color: "#1565c0" };
+      if (all.has("sent"))        return { label: "Enviado / Não aberto",  color: "#6b7280" };
+      return                             { label: "Aguardando envio",      color: "#9ca3af" };
     };
 
-    const total   = targets.length;
-    const sent    = targets.filter((t) => t.sentAt).length;
-    // "opened" = pixel loaded OR clicked/submitted (clicking implies having opened the email)
-    const opened  = targets.filter((t) => {
+    const total     = targets.length;
+    const sent      = targets.filter((t) => t.sentAt).length;
+    const opened    = targets.filter((t) => {
       const evs = eventsByTarget.get(t.id);
-      return evs?.has("opened") || evs?.has("clicked") || evs?.has("submitted");
+      return evs?.has("opened") || evs?.has("clicked") || evs?.has("submitted") || evs?.has("reported");
     }).length;
-    const clicked = targets.filter((t) => {
-      const evs = eventsByTarget.get(t.id);
-      return evs?.has("clicked") || evs?.has("submitted");
-    }).length;
+    const clicked   = targets.filter((t) => { const evs = eventsByTarget.get(t.id); return evs?.has("clicked") || evs?.has("submitted"); }).length;
     const submitted = targets.filter((t) => eventsByTarget.get(t.id)?.has("submitted")).length;
     const reported  = targets.filter((t) => eventsByTarget.get(t.id)?.has("reported")).length;
 
     const fmtDate = (d: string | Date | null) =>
       d ? new Date(d).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
-    const riskPct = total > 0 ? Math.round(((clicked + submitted) / total) * 100) : 0;
-    const riskLabel = riskPct >= 60 ? "Alto" : riskPct >= 30 ? "Médio" : "Baixo";
-    const riskColor = riskPct >= 60 ? "#c62828" : riskPct >= 30 ? "#e65100" : "#2e7d32";
+    // Risk is based on HUMAN-confirmed clicks/submits only.
+    const riskPct   = total > 0 ? Math.round((humanClicked / total) * 100) : 0;
+    const riskLabel = riskPct >= 60 ? "Alto" : riskPct >= 30 ? "Médio" : riskPct > 0 ? "Baixo" : "Nenhum";
+    const riskColor = riskPct >= 60 ? "#c62828" : riskPct >= 30 ? "#e65100" : riskPct > 0 ? "#f59e0b" : "#2e7d32";
 
-    const rows = targets.map((t) => {
-      const evs = eventsByTarget.get(t.id) ?? new Set<string>();
-      const s = getStatus(evs);
-      return `<tr><td>${t.employeeName}</td><td>${t.employeeEmail}</td><td>${t.employeeDepartment ?? "—"}</td>
-<td><span style="background:${s.color}18;color:${s.color};padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600">${s.label}</span></td>
-<td>${t.sentAt ? fmtDate(t.sentAt) : "—"}</td></tr>`;
-    }).join("");
-
-    const logoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="48" height="48" style="display:block">
+    const logoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="44" height="44" style="display:block">
 <path d="M100 20 L170 50 V90 C170 140 140 175 100 190 C60 175 30 140 30 90 V50 L100 20 Z" fill="none" stroke="#fff" stroke-width="12" stroke-linejoin="round"/>
 <rect x="75" y="100" width="50" height="35" rx="8" fill="#fff"/>
 <path d="M85 100 V85 C85 75 115 75 115 85 V100" fill="none" stroke="#fff" stroke-width="12" stroke-linecap="round"/>
-<text x="100" y="180" font-family="sans-serif" font-weight="900" font-size="28" fill="#fff" text-anchor="middle" letter-spacing="2">WNR</text>
 </svg>`;
 
     const statusLabel = campaign.status === "completed" ? "Concluída" : campaign.status === "active" ? "Ativa" : "Rascunho";
+
+    // Confirmed risk actors (clicked or submitted) — human only.
+    const riskActors = targets
+      .filter((t) => { const evs = humanEventsByTarget.get(t.id); return evs?.has("clicked") || evs?.has("submitted"); })
+      .map((t) => ({
+        name: t.employeeName, email: t.employeeEmail,
+        at: actionAtByTarget.get(t.id) ?? null,
+        submitted: humanEventsByTarget.get(t.id)?.has("submitted") ?? false,
+      }))
+      .sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
+
+    // People who showed correct behavior (reported).
+    const reporters = targets
+      .filter((t) => eventsByTarget.get(t.id)?.has("reported"))
+      .map((t) => ({ name: t.employeeName, email: t.employeeEmail, at: actionAtByTarget.get(t.id) ?? null }))
+      .sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
 <title>Relatório — ${campaign.name}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,sans-serif;color:#222;background:#fff;font-size:13px}
-.page{max-width:900px;margin:0 auto;padding:0 0 40px}
+body{font-family:'Segoe UI',Arial,sans-serif;color:#1e293b;background:#fff;font-size:13px;line-height:1.5}
+.page{max-width:860px;margin:0 auto;padding-bottom:40px}
 
-/* Header */
-.header{background:#1a2a4a;color:#fff;padding:24px 40px;display:flex;justify-content:space-between;align-items:center}
-.header-left{display:flex;align-items:center;gap:16px}
-.brand-name{font-size:20px;font-weight:900;letter-spacing:1px;line-height:1.1}
-.brand-sub{font-size:11px;color:#94a3b8;letter-spacing:2px;text-transform:uppercase;margin-top:2px}
-.header-right{text-align:right}
-.report-label{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#94a3b8}
-.report-date{font-size:12px;color:#cbd5e1;margin-top:4px}
+/* ── Header ── */
+.hdr{background:#0f2044;color:#fff;padding:22px 36px;display:flex;justify-content:space-between;align-items:center}
+.hdr-left{display:flex;align-items:center;gap:14px}
+.brand{font-size:18px;font-weight:800;letter-spacing:.5px}
+.brand-sub{font-size:10px;color:#94a3b8;letter-spacing:2px;text-transform:uppercase;margin-top:2px}
+.hdr-right{text-align:right;font-size:11px;color:#94a3b8}
+.hdr-right strong{display:block;color:#e2e8f0;font-size:13px;margin-bottom:2px}
 
-/* Subject bar */
-.subject-bar{background:#1e3a6e;color:#fff;padding:14px 40px;font-size:17px;font-weight:700;letter-spacing:0.3px}
+/* ── Campaign title bar ── */
+.title-bar{background:#1e3a6e;color:#fff;padding:13px 36px;font-size:16px;font-weight:700}
 
-/* Meta grid */
-.meta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#e5e7eb;margin:0;border-bottom:1px solid #e5e7eb}
-.meta-cell{background:#fff;padding:14px 20px}
-.meta-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#6b7280;margin-bottom:4px;font-weight:700}
-.meta-value{font-size:13px;color:#111;font-weight:600}
+/* ── Info grid ── */
+.info-grid{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #e2e8f0}
+.info-cell{padding:13px 20px;border-right:1px solid #e2e8f0}
+.info-cell:last-child,.info-cell:nth-child(3){border-right:none}
+.info-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:#94a3b8;font-weight:700;margin-bottom:3px}
+.info-value{font-size:12px;color:#1e293b;font-weight:600}
 
-/* Section */
-.section{padding:24px 40px}
-.section-title{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#1e3a6e;font-weight:700;border-bottom:2px solid #1e3a6e;padding-bottom:6px;margin-bottom:16px}
+/* ── Section ── */
+.sec{padding:22px 36px}
+.sec+.sec{padding-top:0}
+.sec-title{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#1e3a6e;font-weight:800;border-bottom:2px solid #1e3a6e;padding-bottom:5px;margin-bottom:14px}
 
-/* Stats */
-.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:0}
-.stat{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px 10px;text-align:center}
-.stat-v{font-size:26px;font-weight:800;line-height:1}
-.stat-l{font-size:10px;color:#6b7280;margin-top:4px;letter-spacing:0.5px}
+/* ── Risk banner ── */
+.risk-banner{display:flex;align-items:center;gap:16px;padding:14px 20px;border-radius:8px;margin-bottom:18px}
+.risk-badge{font-size:16px;font-weight:800;color:#fff;padding:6px 18px;border-radius:6px;white-space:nowrap}
+.risk-desc{font-size:12px;color:#475569;line-height:1.5}
 
-/* Risk badge */
-.risk-row{display:flex;align-items:center;gap:12px;margin-top:20px}
-.risk-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:6px;font-weight:700;font-size:14px;color:#fff}
-.risk-pct{font-size:12px;color:#6b7280}
+/* ── Stats ── */
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.stat{border:1px solid #e2e8f0;border-radius:8px;padding:14px 8px;text-align:center}
+.stat-n{font-size:28px;font-weight:800;line-height:1}
+.stat-l{font-size:10px;color:#64748b;margin-top:3px;font-weight:500}
 
-/* Human-confirmed action alert */
-.human-alert{margin-top:18px;border:1px solid #fca5a5;background:#fef2f2;border-radius:8px;padding:14px 18px}
-.human-alert-head{font-size:14px;font-weight:800;color:#b91c1c;letter-spacing:0.2px}
-.human-alert-sub{font-size:11px;color:#7f1d1d;margin-top:2px;margin-bottom:8px}
-.human-alert-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
-.human-alert-list li{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;padding:6px 10px;background:#fff;border:1px solid #fecaca;border-radius:6px}
-.ha-name{font-weight:700;color:#111}
-.ha-mail{color:#6b7280}
-.ha-tag{margin-left:auto;padding:2px 10px;border-radius:20px;font-size:10px;font-weight:700}
-.ha-high{background:#e6510018;color:#e65100}
-.ha-crit{background:#c6282818;color:#c62828}
-.ha-time{color:#b91c1c;font-weight:700;font-variant-numeric:tabular-nums}
-.human-ok{margin-top:18px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;padding:12px 16px;font-size:12px;color:#166534}
+/* ── Alert boxes ── */
+.alert-box{border-radius:8px;padding:14px 18px;margin-bottom:12px}
+.alert-red{border:1px solid #fca5a5;background:#fef2f2}
+.alert-green{border:1px solid #86efac;background:#f0fdf4}
+.alert-blue{border:1px solid #bae6fd;background:#f0f9ff}
+.alert-head{font-size:13px;font-weight:700;margin-bottom:8px}
+.alert-red .alert-head{color:#991b1b}
+.alert-green .alert-head{color:#166534}
+.alert-blue .alert-head{color:#075985}
+.alert-list{list-style:none;display:flex;flex-direction:column;gap:5px}
+.alert-list li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;padding:5px 10px;background:#fff;border-radius:5px}
+.al-name{font-weight:700;color:#1e293b;min-width:80px}
+.al-mail{color:#64748b;flex:1}
+.al-tag{padding:2px 10px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap}
+.tag-crit{background:#fde8e8;color:#b91c1c}
+.tag-high{background:#fff3e0;color:#c2410c}
+.tag-good{background:#dcfce7;color:#15803d}
+.al-time{color:#64748b;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
 
-/* Human-actions metric block */
-.human-note{font-size:11px;color:#6b7280;margin:-8px 0 14px;line-height:1.5}
-.stats-human{grid-template-columns:repeat(3,1fr)}
-.stat-human{background:#fff;border:1px solid #fecaca;border-left:3px solid #b91c1c}
+/* ── Note ── */
+.note{font-size:11px;color:#94a3b8;margin-top:6px;font-style:italic}
 
-/* Table */
-table{width:100%;border-collapse:collapse}
-thead tr{background:#f1f5f9}
-th{padding:10px 14px;text-align:left;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#64748b;font-weight:700;border-bottom:2px solid #e2e8f0}
-td{padding:11px 14px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
-tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:#f8fafc}
-.badge{display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700}
+/* ── Human metrics row ── */
+.hm-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
+.hm-card{border-radius:6px;padding:10px 14px;text-align:center}
+.hm-n{font-size:22px;font-weight:800;line-height:1}
+.hm-l{font-size:10px;margin-top:3px;font-weight:500}
+.hm-risk{border:1px solid #fecaca;background:#fef2f2}
+.hm-risk .hm-n{color:#b91c1c}
+.hm-risk .hm-l{color:#ef4444}
+.hm-good{border:1px solid #86efac;background:#f0fdf4}
+.hm-good .hm-n{color:#16a34a}
+.hm-good .hm-l{color:#22c55e}
+.hm-neutral{border:1px solid #e2e8f0;background:#f8fafc}
+.hm-neutral .hm-n{color:#475569}
+.hm-neutral .hm-l{color:#94a3b8}
 
-/* Footer */
-.footer-conf{background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:12px 16px;font-size:11px;color:#713f12;margin:0 40px 0}
-.footer-bar{display:flex;justify-content:space-between;align-items:center;padding:16px 40px;border-top:1px solid #e5e7eb;margin-top:24px}
-.footer-bar-left{font-size:11px;color:#9ca3af}
-.footer-bar-right{font-size:11px;color:#9ca3af;text-align:right}
+/* ── Table ── */
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead th{padding:9px 12px;text-align:left;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#94a3b8;font-weight:700;border-bottom:2px solid #e2e8f0;background:#f8fafc}
+tbody td{padding:10px 12px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+.badge{display:inline-block;padding:3px 11px;border-radius:20px;font-size:11px;font-weight:600}
 
-/* Print */
-.no-print{}
+/* ── Footer ── */
+.conf-box{margin:0 36px;padding:11px 14px;background:#fefce8;border:1px solid #fde047;border-radius:6px;font-size:11px;color:#713f12}
+.footer{display:flex;justify-content:space-between;padding:14px 36px;border-top:1px solid #e2e8f0;margin-top:20px;font-size:11px;color:#94a3b8}
+
 @media print{
   .no-print{display:none!important}
   body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .subject-bar{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .hdr,.title-bar{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .risk-banner,.alert-box,.hm-card,.stat{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
-</style></head><body>
-<div class="page">
+</style></head><body><div class="page">
 
 <!-- HEADER -->
-<div class="header">
-  <div class="header-left">
+<div class="hdr">
+  <div class="hdr-left">
     ${logoSvg}
     <div>
-      <div class="brand-name">Winner Tecnologia</div>
+      <div class="brand">Winner Tecnologia</div>
       <div class="brand-sub">WNR Audit · Segurança da Informação</div>
     </div>
   </div>
-  <div class="header-right">
-    <div class="report-label">Relatório de Campanha</div>
-    <div class="report-date">Gerado em ${fmtDate(new Date())}</div>
-    <button onclick="window.print()" class="no-print" style="margin-top:10px;padding:6px 16px;background:#334155;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:0.5px">🖨️ Imprimir / PDF</button>
+  <div class="hdr-right">
+    <strong>Relatório de Campanha de Phishing Simulado</strong>
+    Gerado em ${fmtDate(new Date())}
+    <button onclick="window.print()" class="no-print" style="display:block;margin-top:8px;padding:5px 14px;background:#334155;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;margin-left:auto">🖨️ Imprimir / PDF</button>
   </div>
 </div>
 
-<!-- SUBJECT BAR -->
-<div class="subject-bar">Phishing Simulado — ${campaign.name}</div>
+<!-- TITLE BAR -->
+<div class="title-bar">Phishing Simulado — ${campaign.name}</div>
 
-<!-- META -->
-<div class="meta-grid">
-  <div class="meta-cell"><div class="meta-label">Cliente</div><div class="meta-value">${campaign.tenantDisplayName ?? "—"}</div></div>
-  <div class="meta-cell"><div class="meta-label">Status</div><div class="meta-value">${statusLabel}</div></div>
-  <div class="meta-cell"><div class="meta-label">Remetente simulado</div><div class="meta-value">${campaign.senderName} &lt;${campaign.senderEmail}&gt;</div></div>
-  <div class="meta-cell"><div class="meta-label">Data de início</div><div class="meta-value">${fmtDate(campaign.startedAt)}</div></div>
-  <div class="meta-cell"><div class="meta-label">Data de conclusão</div><div class="meta-value">${fmtDate(campaign.completedAt)}</div></div>
-  <div class="meta-cell"><div class="meta-label">Total de alvos</div><div class="meta-value">${total} funcionário(s)</div></div>
+<!-- INFO GRID -->
+<div class="info-grid">
+  <div class="info-cell"><div class="info-label">Cliente</div><div class="info-value">${campaign.tenantDisplayName ?? "—"}</div></div>
+  <div class="info-cell"><div class="info-label">Status</div><div class="info-value">${statusLabel}</div></div>
+  <div class="info-cell"><div class="info-label">Remetente simulado</div><div class="info-value">${campaign.senderName} &lt;${campaign.senderEmail}&gt;</div></div>
+  <div class="info-cell"><div class="info-label">Início</div><div class="info-value">${fmtDate(campaign.startedAt)}</div></div>
+  <div class="info-cell"><div class="info-label">Conclusão</div><div class="info-value">${fmtDate(campaign.completedAt)}</div></div>
+  <div class="info-cell"><div class="info-label">Total de alvos</div><div class="info-value">${total} funcionário(s)</div></div>
 </div>
 
-<!-- STATS -->
-<div class="section">
-  <div class="section-title">Resumo de Resultados</div>
-  <div class="stats">
-    <div class="stat"><div class="stat-v">${sent}</div><div class="stat-l">Enviados</div></div>
-    <div class="stat"><div class="stat-v" style="color:#1565c0">${opened}</div><div class="stat-l">Abriram</div></div>
-    <div class="stat"><div class="stat-v" style="color:#e65100">${clicked}</div><div class="stat-l">Clicaram</div></div>
-    <div class="stat"><div class="stat-v" style="color:#c62828">${submitted}</div><div class="stat-l">Submeteram cred.</div></div>
-    <div class="stat"><div class="stat-v" style="color:#2e7d32">${reported}</div><div class="stat-l">Reportaram</div></div>
-    <div class="stat"><div class="stat-v" style="color:#6b7280">${sent - opened}</div><div class="stat-l">Não abriram</div></div>
-  </div>
-  <div class="risk-row">
+<!-- RESULTADOS -->
+<div class="sec">
+  <div class="sec-title">Resultados da Campanha</div>
+
+  <!-- Risk banner -->
+  <div class="risk-banner" style="background:${riskColor}12;border:1px solid ${riskColor}40">
     <span class="risk-badge" style="background:${riskColor}">${riskLabel}</span>
-    <span class="risk-pct">${riskPct}% dos alvos clicaram no link ou submeteram credenciais</span>
+    <div class="risk-desc">
+      <strong>${humanClicked} de ${total} funcionário(s)</strong> clicaram no link ou submeteram credenciais (ações humanas confirmadas, sem scanner).<br>
+      ${humanReported > 0 ? `<strong>${humanReported} funcionário(s) reportaram</strong> o e-mail suspeito ao TI — comportamento correto esperado.` : "Nenhum funcionário reportou o e-mail ao TI."}
+    </div>
   </div>
-  ${(() => {
-    // Human-confirmed actions (click or credential submit). Only events flagged
-    // humanVerified=true count here — scanner / Safe Links signals are excluded,
-    // so every entry is a real person.
-    const confirmed = targets
-      .filter((t) => {
-        const evs = humanEventsByTarget.get(t.id);
-        return evs?.has("clicked") || evs?.has("submitted");
-      })
-      .map((t) => ({
-        name: t.employeeName,
-        email: t.employeeEmail,
-        at: actionAtByTarget.get(t.id) ?? null,
-        submitted: humanEventsByTarget.get(t.id)?.has("submitted") ?? false,
-      }))
-      .sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
 
-    if (confirmed.length === 0) {
-      return `<div class="human-ok">
-        <strong>Nenhum clique humano confirmado.</strong> Eventos de scanner / Safe Links foram descartados automaticamente e não contam nas métricas acima.
-      </div>`;
-    }
+  <!-- Stats row -->
+  <div class="stats">
+    <div class="stat"><div class="stat-n">${sent}</div><div class="stat-l">Enviados</div></div>
+    <div class="stat"><div class="stat-n" style="color:#1565c0">${opened}</div><div class="stat-l">Abriram</div></div>
+    <div class="stat"><div class="stat-n" style="color:#e65100">${clicked}</div><div class="stat-l">Clicaram</div></div>
+    <div class="stat"><div class="stat-n" style="color:#c62828">${submitted}</div><div class="stat-l">Submeteram cred.</div></div>
+    <div class="stat"><div class="stat-n" style="color:#16a34a">${reported}</div><div class="stat-l">Reportaram</div></div>
+  </div>
+  <p class="note">Abriram / Clicaram incluem detecções de scanners de segurança (Microsoft Safe Links). Os números reais de humanos estão na seção abaixo.</p>
 
-    const items = confirmed.map((c) => {
-      const tag = c.submitted
-        ? `<span class="ha-tag ha-crit">Submeteu credenciais</span>`
-        : `<span class="ha-tag ha-high">Clicou no link</span>`;
-      return `<li><span class="ha-name">${c.name}</span> <span class="ha-mail">${c.email}</span> ${tag} <span class="ha-time">${c.at ? fmtDate(c.at) : "—"}</span></li>`;
-    }).join("");
+  <!-- Human metrics -->
+  <div class="hm-row">
+    <div class="hm-card hm-risk"><div class="hm-n">${humanClicked}</div><div class="hm-l">Cliques humanos</div></div>
+    <div class="hm-card hm-risk"><div class="hm-n">${humanSubmitted}</div><div class="hm-l">Credenciais submetidas</div></div>
+    <div class="hm-card hm-good"><div class="hm-n">${humanReported}</div><div class="hm-l">Reportaram ao TI</div></div>
+    <div class="hm-card hm-neutral"><div class="hm-n">${Math.max(clicked - humanClicked, 0)}</div><div class="hm-l">Cliques de scanner</div></div>
+  </div>
 
-    return `<div class="human-alert">
-      <div class="human-alert-head">⚠️ ${confirmed.length} clique(s) humano(s) confirmado(s)</div>
-      <div class="human-alert-sub">Ações reais de pessoas — scanners e detonação do Safe Links já foram filtrados. Horário na data/hora do servidor.</div>
-      <ul class="human-alert-list">${items}</ul>
-    </div>`;
-  })()}
+  <!-- Risk actors -->
+  ${riskActors.length > 0 ? `
+  <div class="alert-box alert-red" style="margin-top:16px">
+    <div class="alert-head">⚠️ Ações de risco confirmadas (${riskActors.length})</div>
+    <ul class="alert-list">${riskActors.map((c) => `
+      <li>
+        <span class="al-name">${c.name}</span>
+        <span class="al-mail">${c.email}</span>
+        <span class="al-tag ${c.submitted ? "tag-crit" : "tag-high"}">${c.submitted ? "Submeteu credenciais" : "Clicou no link"}</span>
+        <span class="al-time">${c.at ? fmtDate(c.at) : "—"}</span>
+      </li>`).join("")}
+    </ul>
+  </div>` : `
+  <div class="alert-box alert-blue" style="margin-top:16px">
+    <div class="alert-head">✓ Nenhum clique humano confirmado</div>
+    <div style="font-size:12px;color:#075985">Eventos de scanner / Safe Links foram descartados. Nenhum funcionário clicou no link de phishing.</div>
+  </div>`}
+
+  <!-- Reporters -->
+  ${reporters.length > 0 ? `
+  <div class="alert-box alert-green">
+    <div class="alert-head">✓ Funcionários que reportaram corretamente (${reporters.length})</div>
+    <ul class="alert-list">${reporters.map((r) => `
+      <li>
+        <span class="al-name">${r.name}</span>
+        <span class="al-mail">${r.email}</span>
+        <span class="al-tag tag-good">Reportou ao TI</span>
+        <span class="al-time">${r.at ? fmtDate(r.at) : "—"}</span>
+      </li>`).join("")}
+    </ul>
+  </div>` : ""}
 </div>
 
-<!-- HUMAN ACTIONS (separado das métricas detectadas acima) -->
-<div class="section" style="padding-top:0">
-  <div class="section-title">Ações Humanas Confirmadas</div>
-  <p class="human-note">Contagem de <strong>interações reais de pessoas</strong>. Não inclui scanners de segurança nem a detonação do Microsoft Safe Links — que inflam os números de "Abriram" e "Clicaram" do resumo acima. Use estes valores para a análise de risco real.</p>
-  <div class="stats stats-human">
-    <div class="stat stat-human"><div class="stat-v" style="color:#b91c1c">${humanClicked}</div><div class="stat-l">Cliques humanos</div></div>
-    <div class="stat stat-human"><div class="stat-v" style="color:#7f1d1d">${humanSubmitted}</div><div class="stat-l">Submissões humanas</div></div>
-    <div class="stat stat-human"><div class="stat-v" style="color:#334155">${Math.max(clicked - humanClicked, 0)}</div><div class="stat-l">Cliques de scanner (não humanos)</div></div>
-  </div>
-</div>
-
-<!-- TABLE -->
-<div class="section" style="padding-top:0">
-  <div class="section-title">Detalhamento por Funcionário</div>
+<!-- DETALHAMENTO -->
+<div class="sec">
+  <div class="sec-title">Detalhamento por Funcionário</div>
   <table>
-    <thead><tr><th>#</th><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Resultado</th><th>Enviado em</th><th>Ação humana em</th></tr></thead>
+    <thead>
+      <tr>
+        <th>#</th><th>Nome</th><th>E-mail</th><th>Departamento</th>
+        <th>Resultado</th><th>Enviado em</th><th>Ação em</th>
+      </tr>
+    </thead>
     <tbody>${targets.map((t, i) => {
-      const evs = eventsByTarget.get(t.id) ?? new Set<string>();
-      const s = getStatus(evs);
+      const s = getStatus(t.id);
       const actionAt = actionAtByTarget.get(t.id) ?? null;
-      const actionCell = actionAt
-        ? `<span style="color:#c62828;font-weight:600">${fmtDate(actionAt)}</span>`
-        : `<span style="color:#9ca3af">—</span>`;
-      return `<tr><td style="color:#9ca3af">${i + 1}</td><td style="font-weight:600">${t.employeeName}</td><td>${t.employeeEmail}</td><td>${t.employeeDepartment ?? "—"}</td>
-<td><span class="badge" style="background:${s.color}18;color:${s.color}">${s.label}</span></td>
-<td style="color:#6b7280">${t.sentAt ? fmtDate(t.sentAt) : "—"}</td>
-<td>${actionCell}</td></tr>`;
+      return `<tr>
+        <td style="color:#cbd5e1;font-size:11px">${i + 1}</td>
+        <td style="font-weight:600">${t.employeeName}</td>
+        <td style="color:#64748b">${t.employeeEmail}</td>
+        <td style="color:#64748b">${t.employeeDepartment ?? "—"}</td>
+        <td><span class="badge" style="background:${s.color}18;color:${s.color}">${s.label}</span></td>
+        <td style="color:#94a3b8;font-size:11px">${t.sentAt ? fmtDate(t.sentAt) : "—"}</td>
+        <td style="font-size:11px${actionAt ? ";color:#c62828;font-weight:600" : ";color:#cbd5e1"}">${actionAt ? fmtDate(actionAt) : "—"}</td>
+      </tr>`;
     }).join("")}</tbody>
   </table>
 </div>
 
 <!-- CONFIDENTIALITY -->
-<div class="footer-conf">
-  <strong>Aviso de Confidencialidade:</strong> Este relatório é confidencial e destinado exclusivamente ao cliente solicitante. As informações contidas neste documento referem-se à campanha de phishing simulado realizada pela Winner Tecnologia e não devem ser reproduzidas ou distribuídas sem autorização prévia.
+<div class="conf-box">
+  <strong>Confidencial:</strong> Este relatório é destinado exclusivamente ao cliente solicitante e não deve ser reproduzido ou distribuído sem autorização prévia. Campanha de phishing simulado realizada pela Winner Tecnologia.
 </div>
 
-<!-- FOOTER BAR -->
-<div class="footer-bar">
-  <div class="footer-bar-left"><strong>Winner Tecnologia</strong><br>WNR Audit · Suporte Técnico Especializado</div>
-  <div class="footer-bar-right">Documento gerado em ${fmtDate(new Date())}<br>Gerado automaticamente pelo WNR Audit</div>
+<!-- FOOTER -->
+<div class="footer">
+  <div><strong>Winner Tecnologia</strong> · WNR Audit</div>
+  <div>Gerado automaticamente em ${fmtDate(new Date())}</div>
 </div>
 
 </div></body></html>`);
