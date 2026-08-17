@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 
 type CaptureStyle = "m365" | "hr" | "financial" | "it" | "generic";
 
 // ─── Formulário Microsoft 365 ────────────────────────────────────────────────
 
-function M365Form({ onSubmit }: { onSubmit: () => void }) {
+function M365Form({ onSubmit, onInteract }: { onSubmit: () => void; onInteract: () => void }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [step, setStep] = useState<"email" | "password">("email");
@@ -28,7 +28,7 @@ function M365Form({ onSubmit }: { onSubmit: () => void }) {
               type="email"
               placeholder="E-mail, telefone ou Skype"
               value={user}
-              onChange={(e) => setUser(e.target.value)}
+              onChange={(e) => { onInteract(); setUser(e.target.value); }}
               style={{ width: "100%", padding: "8px 0", border: "none", borderBottom: "1px solid #767676", outline: "none", fontSize: 15, marginBottom: 24, boxSizing: "border-box" }}
               autoFocus
             />
@@ -80,7 +80,7 @@ function M365Form({ onSubmit }: { onSubmit: () => void }) {
 
 // ─── Formulário RH ───────────────────────────────────────────────────────────
 
-function HRForm({ onSubmit }: { onSubmit: () => void }) {
+function HRForm({ onSubmit, onInteract }: { onSubmit: () => void; onInteract: () => void }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
 
@@ -96,7 +96,7 @@ function HRForm({ onSubmit }: { onSubmit: () => void }) {
           type="text"
           placeholder="Ex: 12345 ou 000.000.000-00"
           value={user}
-          onChange={(e) => setUser(e.target.value)}
+          onChange={(e) => { onInteract(); setUser(e.target.value); }}
           style={{ width: "100%", padding: "9px 12px", border: "1px solid #ccc", borderRadius: 3, fontSize: 14, marginBottom: 16, boxSizing: "border-box" }}
         />
         <label style={{ fontSize: 13, color: "#555", display: "block", marginBottom: 4 }}>Senha</label>
@@ -125,7 +125,7 @@ function HRForm({ onSubmit }: { onSubmit: () => void }) {
 
 // ─── Formulário Financeiro ───────────────────────────────────────────────────
 
-function FinancialForm({ onSubmit }: { onSubmit: () => void }) {
+function FinancialForm({ onSubmit, onInteract }: { onSubmit: () => void; onInteract: () => void }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
 
@@ -142,7 +142,7 @@ function FinancialForm({ onSubmit }: { onSubmit: () => void }) {
           type="text"
           placeholder="000.000.000-00"
           value={user}
-          onChange={(e) => setUser(e.target.value)}
+          onChange={(e) => { onInteract(); setUser(e.target.value); }}
           style={{ width: "100%", padding: "10px 12px", background: "#0d2137", border: "1px solid #2d4a6e", borderRadius: 3, fontSize: 14, color: "#fff", marginBottom: 16, boxSizing: "border-box" }}
         />
         <label style={{ fontSize: 12, color: "#94a3b8", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: 1 }}>Senha</label>
@@ -173,7 +173,7 @@ function FinancialForm({ onSubmit }: { onSubmit: () => void }) {
 
 // ─── Formulário TI ───────────────────────────────────────────────────────────
 
-function ITForm({ onSubmit }: { onSubmit: () => void }) {
+function ITForm({ onSubmit, onInteract }: { onSubmit: () => void; onInteract: () => void }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
 
@@ -189,7 +189,7 @@ function ITForm({ onSubmit }: { onSubmit: () => void }) {
           type="text"
           placeholder="domínio\\usuário"
           value={user}
-          onChange={(e) => setUser(e.target.value)}
+          onChange={(e) => { onInteract(); setUser(e.target.value); }}
           style={{ width: "100%", padding: "9px 10px", background: "#111827", border: "1px solid #374151", borderRadius: 2, fontSize: 13, color: "#d1d5db", marginBottom: 16, boxSizing: "border-box", fontFamily: "monospace" }}
         />
         <label style={{ fontSize: 11, color: "#22c55e", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: 2 }}>Senha</label>
@@ -215,7 +215,7 @@ function ITForm({ onSubmit }: { onSubmit: () => void }) {
 
 // ─── Formulário Genérico ─────────────────────────────────────────────────────
 
-function GenericForm({ onSubmit }: { onSubmit: () => void }) {
+function GenericForm({ onSubmit, onInteract }: { onSubmit: () => void; onInteract: () => void }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
 
@@ -229,7 +229,7 @@ function GenericForm({ onSubmit }: { onSubmit: () => void }) {
           type="text"
           placeholder="seu@email.com.br"
           value={user}
-          onChange={(e) => setUser(e.target.value)}
+          onChange={(e) => { onInteract(); setUser(e.target.value); }}
           style={{ width: "100%", padding: "10px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, marginBottom: 16, boxSizing: "border-box" }}
         />
         <label style={{ fontSize: 13, color: "#374151", display: "block", marginBottom: 4 }}>Senha</label>
@@ -261,6 +261,7 @@ export default function PhishingCapture({ token }: { token: string }) {
   const [style, setStyle] = useState<CaptureStyle | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [, navigate] = useLocation();
+  const interactFired = useRef(false);
 
   useEffect(() => {
     fetch(`/api/phishing/capture-info/${token}`, { credentials: "include" })
@@ -268,6 +269,19 @@ export default function PhishingCapture({ token }: { token: string }) {
       .then((d) => setStyle((d.style as CaptureStyle) ?? "generic"))
       .catch(() => setStyle("generic"));
   }, [token]);
+
+  // Fires once when user types in any form field — proves human interaction.
+  // Scanners visit the page but don't type, so this never fires for them.
+  const handleInteract = () => {
+    if (interactFired.current) return;
+    interactFired.current = true;
+    fetch(`/api/phishing/track/${token}/interact`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ humanVerified: true }),
+    }).catch(() => {});
+  };
 
   const handleSubmit = async () => {
     if (submitting) return;
@@ -290,9 +304,9 @@ export default function PhishingCapture({ token }: { token: string }) {
     );
   }
 
-  if (style === "m365")       return <M365Form onSubmit={handleSubmit} />;
-  if (style === "hr")         return <HRForm onSubmit={handleSubmit} />;
-  if (style === "financial")  return <FinancialForm onSubmit={handleSubmit} />;
-  if (style === "it")         return <ITForm onSubmit={handleSubmit} />;
-  return <GenericForm onSubmit={handleSubmit} />;
+  if (style === "m365")       return <M365Form onSubmit={handleSubmit} onInteract={handleInteract} />;
+  if (style === "hr")         return <HRForm onSubmit={handleSubmit} onInteract={handleInteract} />;
+  if (style === "financial")  return <FinancialForm onSubmit={handleSubmit} onInteract={handleInteract} />;
+  if (style === "it")         return <ITForm onSubmit={handleSubmit} onInteract={handleInteract} />;
+  return <GenericForm onSubmit={handleSubmit} onInteract={handleInteract} />;
 }

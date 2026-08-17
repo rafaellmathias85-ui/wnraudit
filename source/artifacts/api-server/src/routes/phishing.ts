@@ -1407,6 +1407,18 @@ router.post("/phishing/track/:token/arrived", async (req, res): Promise<void> =>
   res.json({ ok: true });
 });
 
+// First keystroke in capture-page form — proves a human reached and typed into the
+// fake login form. Scanners follow the /click redirect but never type in form fields.
+router.post("/phishing/track/:token/interact", async (req, res): Promise<void> => {
+  const token = req.params.token as string;
+  const clientHumanClaim = (req.body?.humanVerified === true);
+  const base = { ip: req.ip, ua: req.headers["user-agent"], via: "capture-page" };
+  // Typing in the form proves the email was opened and the link was clicked.
+  await recordEvent(token, "opened",  base, clientHumanClaim).catch(() => {});
+  await recordEvent(token, "clicked", base, clientHumanClaim).catch(() => {});
+  res.json({ ok: true });
+});
+
 // Report as phishing via email link — redirects to training SPA with action=report.
 // Events (opened + reported) are recorded by the SPA's useEffect via POST /report.
 // Scanners follow this redirect but cannot execute JavaScript, so no false events.
