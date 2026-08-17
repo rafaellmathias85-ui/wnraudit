@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Mail, Users, MousePointerClick, ChevronRight, Play, CheckCircle2, FileText, Building2, Settings2 } from "lucide-react";
+import { Plus, Mail, Users, MousePointerClick, ChevronRight, Play, CheckCircle2, FileText, Building2, Settings2, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -59,6 +59,7 @@ export default function PhishingCampaigns() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [isNewOpen, setIsNewOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Campaign | null>(null);
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -102,8 +103,12 @@ export default function PhishingCampaigns() {
 
   const deleteCampaign = useMutation({
     mutationFn: (id: string) => apiFetch(`/phishing/campaigns/${id}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["phishing-campaigns"] }),
-    onError: (e: Error) => toast({ variant: "destructive", title: "Erro", description: e.message }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["phishing-campaigns"] });
+      setDeleteTarget(null);
+      toast({ title: "Campanha excluída" });
+    },
+    onError: (e: Error) => toast({ variant: "destructive", title: "Erro ao excluir", description: e.message }),
   });
 
   return (
@@ -292,6 +297,14 @@ export default function PhishingCampaigns() {
                           Concluída
                         </Badge>
                       )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={(e) => { e.preventDefault(); setDeleteTarget(c); }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                       <Link href={`/phishing/campaigns/${c.id}`}>
                         <Button variant="ghost" size="icon">
                           <ChevronRight className="h-4 w-4" />
@@ -305,6 +318,32 @@ export default function PhishingCampaigns() {
           })}
         </div>
       )}
+
+      {/* Confirmação de exclusão */}
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Excluir campanha</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground py-2">
+            Tem certeza que deseja excluir a campanha{" "}
+            <span className="font-semibold text-foreground">"{deleteTarget?.name}"</span>?
+            Todos os alvos e eventos de rastreamento serão removidos permanentemente.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteCampaign.isPending}
+              onClick={() => deleteTarget && deleteCampaign.mutate(deleteTarget.id)}
+            >
+              {deleteCampaign.isPending ? "Excluindo..." : "Excluir"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
