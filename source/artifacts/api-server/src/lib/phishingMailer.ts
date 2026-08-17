@@ -1,21 +1,14 @@
 import nodemailer from "nodemailer";
 import { logger } from "./logger";
 
-function createTransport() {
-  const host = process.env.SMTP_HOST;
-  const port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+export type SmtpCredentials = {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+};
 
-  if (!host || !user || !pass) {
-    throw new Error(
-      "SMTP_HOST, SMTP_USER e SMTP_PASS devem estar definidos para envio de e-mails de phishing.",
-    );
-  }
-
-  // Optional DKIM signing. When PHISHING_DKIM_DOMAIN, PHISHING_DKIM_SELECTOR and
-  // PHISHING_DKIM_PRIVATE_KEY are set, messages are DKIM-signed so the sending
-  // domain passes DKIM/DMARC alignment — a major factor in avoiding quarantine.
+function buildTransport(creds: SmtpCredentials) {
   const dkimDomain = process.env.PHISHING_DKIM_DOMAIN;
   const dkimSelector = process.env.PHISHING_DKIM_SELECTOR;
   const dkimKey = process.env.PHISHING_DKIM_PRIVATE_KEY?.replace(/\\n/g, "\n");
@@ -26,12 +19,36 @@ function createTransport() {
       : undefined;
 
   return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
+    host: creds.host,
+    port: creds.port,
+    secure: creds.port === 465,
+    auth: { user: creds.user, pass: creds.pass },
     ...(dkim ? { dkim } : {}),
   });
+}
+
+function getEnvCredentials(): SmtpCredentials {
+  const host = process.env.SMTP_HOST;
+  const port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  if (!host || !user || !pass) {
+    throw new Error(
+      "Nenhuma configuração SMTP encontrada. Cadastre um e-mail SMTP em Simulação de Phishing → SMTP.",
+    );
+  }
+  return { host, port, user, pass };
+}
+
+export function createSmtpTransport(creds?: SmtpCredentials) {
+  return buildTransport(creds ?? getEnvCredentials());
+}
+
+export async function verifySmtpCredentials(creds: SmtpCredentials): Promise<void> {
+  const transport = buildTransport(creds);
+  await transport.verify();
+  transport.close();
 }
 
 type PhishingMailOptions = {
@@ -71,8 +88,8 @@ function injectTracking(html: string, token: string, baseUrl: string): string {
   return processed;
 }
 
-export async function sendPhishingEmail(opts: PhishingMailOptions): Promise<void> {
-  const transport = createTransport();
+export async function sendPhishingEmail(opts: PhishingMailOptions & { smtpCreds?: SmtpCredentials }): Promise<void> {
+  const transport = createSmtpTransport(opts.smtpCreds);
   const html = injectTracking(opts.htmlBody, opts.trackingToken, opts.trackingBaseUrl);
 
   // Optional X-header carrying a shared secret. When configured on both the

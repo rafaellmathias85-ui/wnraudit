@@ -51,6 +51,7 @@ import PhishingTemplates from "@/pages/phishing/templates";
 import PhishingEmployees from "@/pages/phishing/employees";
 import PhishingTraining from "@/pages/phishing/training";
 import PhishingCapture from "@/pages/phishing/capture";
+import PhishingSmtp from "@/pages/phishing/smtp";
 import AwarenessModulesList from "@/pages/awareness/list";
 import AwarenessModuleDetail from "@/pages/awareness/module-detail";
 
@@ -383,6 +384,12 @@ function Router() {
       <Route path="/phishing/employees">
         <AuthenticatedRoute>
           <PhishingEmployees />
+        </AuthenticatedRoute>
+      </Route>
+
+      <Route path="/phishing/smtp">
+        <AuthenticatedRoute>
+          <PhishingSmtp />
         </AuthenticatedRoute>
       </Route>
 

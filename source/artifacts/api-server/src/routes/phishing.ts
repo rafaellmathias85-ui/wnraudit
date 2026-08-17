@@ -9,12 +9,13 @@ import {
   phishingEmployeesTable,
   phishingCampaignTargetsTable,
   phishingEventsTable,
+  phishingSmtpConfigsTable,
   awarenessModulesTable,
 } from "@workspace/db";
 import { requireAuth } from "../middlewares/requireAuth";
-import { sendPhishingEmail } from "../lib/phishingMailer";
+import { sendPhishingEmail, verifySmtpCredentials } from "../lib/phishingMailer";
 import { logger } from "../lib/logger";
-import { decryptSecret } from "../lib/msProvisioner";
+import { decryptSecret, encryptSecret } from "../lib/msProvisioner";
 import { getOAuthClientSecretForClientId } from "../lib/oauth";
 
 const router: IRouter = Router();
@@ -197,6 +198,169 @@ router.delete("/phishing/templates/:templateId", requireAuth, async (req, res): 
     .returning();
   if (!deleted) {
     res.status(404).json({ error: "Template não encontrado" });
+    return;
+  }
+  res.sendStatus(204);
+});
+
+// ─── SMTP Configs ─────────────────────────────────────────────────────────────
+
+router.get("/phishing/smtp", requireAuth, async (req, res): Promise<void> => {
+  const customer = req.customer!;
+  const configs = await db
+    .select({
+      id: phishingSmtpConfigsTable.id,
+      displayName: phishingSmtpConfigsTable.displayName,
+      email: phishingSmtpConfigsTable.email,
+      smtpHost: phishingSmtpConfigsTable.smtpHost,
+      smtpPort: phishingSmtpConfigsTable.smtpPort,
+      smtpUser: phishingSmtpConfigsTable.smtpUser,
+      status: phishingSmtpConfigsTable.status,
+      lastTestedAt: phishingSmtpConfigsTable.lastTestedAt,
+      createdAt: phishingSmtpConfigsTable.createdAt,
+    })
+    .from(phishingSmtpConfigsTable)
+    .where(eq(phishingSmtpConfigsTable.customerId, customer.id))
+    .orderBy(desc(phishingSmtpConfigsTable.createdAt));
+  res.json(configs);
+});
+
+router.post("/phishing/smtp", requireAuth, async (req, res): Promise<void> => {
+  const parsed = z
+    .object({
+      displayName: z.string().min(1),
+      email: z.string().email(),
+      smtpHost: z.string().min(1),
+      smtpPort: z.number().int().min(1).max(65535).default(587),
+      smtpUser: z.string().min(1),
+      smtpPass: z.string().min(1),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const customer = req.customer!;
+  const { smtpPass, ...rest } = parsed.data;
+  const [created] = await db
+    .insert(phishingSmtpConfigsTable)
+    .values({
+      customerId: customer.id,
+      ...rest,
+      encryptedSmtpPass: encryptSecret(smtpPass),
+      status: "pending",
+    })
+    .returning({
+      id: phishingSmtpConfigsTable.id,
+      displayName: phishingSmtpConfigsTable.displayName,
+      email: phishingSmtpConfigsTable.email,
+      smtpHost: phishingSmtpConfigsTable.smtpHost,
+      smtpPort: phishingSmtpConfigsTable.smtpPort,
+      smtpUser: phishingSmtpConfigsTable.smtpUser,
+      status: phishingSmtpConfigsTable.status,
+      lastTestedAt: phishingSmtpConfigsTable.lastTestedAt,
+      createdAt: phishingSmtpConfigsTable.createdAt,
+    });
+  res.status(201).json(created);
+});
+
+router.patch("/phishing/smtp/:id", requireAuth, async (req, res): Promise<void> => {
+  const parsed = z
+    .object({
+      displayName: z.string().min(1).optional(),
+      email: z.string().email().optional(),
+      smtpHost: z.string().min(1).optional(),
+      smtpPort: z.number().int().min(1).max(65535).optional(),
+      smtpUser: z.string().min(1).optional(),
+      smtpPass: z.string().min(1).optional(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const customer = req.customer!;
+  const { smtpPass, ...rest } = parsed.data;
+  const updates: Record<string, unknown> = {
+    ...rest,
+    status: "pending",
+    updatedAt: new Date(),
+  };
+  if (smtpPass) updates.encryptedSmtpPass = encryptSecret(smtpPass);
+
+  const [updated] = await db
+    .update(phishingSmtpConfigsTable)
+    .set(updates)
+    .where(
+      and(
+        eq(phishingSmtpConfigsTable.id, req.params.id as string),
+        eq(phishingSmtpConfigsTable.customerId, customer.id),
+      ),
+    )
+    .returning({
+      id: phishingSmtpConfigsTable.id,
+      displayName: phishingSmtpConfigsTable.displayName,
+      email: phishingSmtpConfigsTable.email,
+      smtpHost: phishingSmtpConfigsTable.smtpHost,
+      smtpPort: phishingSmtpConfigsTable.smtpPort,
+      smtpUser: phishingSmtpConfigsTable.smtpUser,
+      status: phishingSmtpConfigsTable.status,
+      lastTestedAt: phishingSmtpConfigsTable.lastTestedAt,
+      createdAt: phishingSmtpConfigsTable.createdAt,
+    });
+  if (!updated) {
+    res.status(404).json({ error: "Configuração SMTP não encontrada" });
+    return;
+  }
+  res.json(updated);
+});
+
+router.post("/phishing/smtp/:id/test", requireAuth, async (req, res): Promise<void> => {
+  const customer = req.customer!;
+  const [config] = await db
+    .select()
+    .from(phishingSmtpConfigsTable)
+    .where(
+      and(
+        eq(phishingSmtpConfigsTable.id, req.params.id as string),
+        eq(phishingSmtpConfigsTable.customerId, customer.id),
+      ),
+    );
+  if (!config) {
+    res.status(404).json({ error: "Configuração SMTP não encontrada" });
+    return;
+  }
+  try {
+    const pass = decryptSecret(config.encryptedSmtpPass);
+    await verifySmtpCredentials({ host: config.smtpHost, port: config.smtpPort, user: config.smtpUser, pass });
+    await db
+      .update(phishingSmtpConfigsTable)
+      .set({ status: "verified", lastTestedAt: new Date(), updatedAt: new Date() })
+      .where(eq(phishingSmtpConfigsTable.id, config.id));
+    res.json({ ok: true, status: "verified" });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    await db
+      .update(phishingSmtpConfigsTable)
+      .set({ status: "failed", lastTestedAt: new Date(), updatedAt: new Date() })
+      .where(eq(phishingSmtpConfigsTable.id, config.id));
+    res.status(422).json({ ok: false, status: "failed", error: message });
+  }
+});
+
+router.delete("/phishing/smtp/:id", requireAuth, async (req, res): Promise<void> => {
+  const customer = req.customer!;
+  const [deleted] = await db
+    .delete(phishingSmtpConfigsTable)
+    .where(
+      and(
+        eq(phishingSmtpConfigsTable.id, req.params.id as string),
+        eq(phishingSmtpConfigsTable.customerId, customer.id),
+      ),
+    )
+    .returning({ id: phishingSmtpConfigsTable.id });
+  if (!deleted) {
+    res.status(404).json({ error: "Configuração SMTP não encontrada" });
     return;
   }
   res.sendStatus(204);
@@ -783,6 +947,23 @@ router.post(
       process.env.FRONTEND_BASE_URL?.replace(/\/wnraudit\/?$/, "") ||
       "https://wnrtecnologia.com.br";
 
+    // Resolve SMTP config for this campaign's sender email (if configured in DB)
+    const [smtpConfig] = await db
+      .select()
+      .from(phishingSmtpConfigsTable)
+      .where(
+        and(
+          eq(phishingSmtpConfigsTable.customerId, customer.id),
+          eq(phishingSmtpConfigsTable.email, campaign.senderEmail),
+          eq(phishingSmtpConfigsTable.status, "verified"),
+        ),
+      )
+      .limit(1);
+
+    const smtpCreds = smtpConfig
+      ? { host: smtpConfig.smtpHost, port: smtpConfig.smtpPort, user: smtpConfig.smtpUser, pass: decryptSecret(smtpConfig.encryptedSmtpPass) }
+      : undefined; // falls back to env SMTP_HOST/USER/PASS
+
     await db
       .update(phishingCampaignsTable)
       .set({ status: "active", startedAt: new Date(), updatedAt: new Date() })
@@ -812,6 +993,7 @@ router.post(
             htmlBody,
             trackingToken: target.trackingToken,
             trackingBaseUrl,
+            smtpCreds,
           });
           await db
             .update(phishingCampaignTargetsTable)

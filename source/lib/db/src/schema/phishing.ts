@@ -2,6 +2,7 @@ import {
   pgTable,
   uuid,
   text,
+  integer,
   timestamp,
   pgEnum,
   jsonb,
@@ -99,6 +100,26 @@ export const phishingEventsTable = pgTable("phishing_events", {
   occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
   metadata: jsonb("metadata"),
 });
+
+export const phishingSmtpConfigsTable = pgTable("phishing_smtp_configs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  customerId: uuid("customer_id")
+    .notNull()
+    .references(() => customersTable.id, { onDelete: "cascade" }),
+  displayName: text("display_name").notNull(),
+  email: text("email").notNull(),
+  smtpHost: text("smtp_host").notNull(),
+  smtpPort: integer("smtp_port").notNull().default(587),
+  smtpUser: text("smtp_user").notNull(),
+  encryptedSmtpPass: text("encrypted_smtp_pass").notNull(),
+  // pending | verified | failed
+  status: text("status").notNull().default("pending"),
+  lastTestedAt: timestamp("last_tested_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type PhishingSmtpConfig = typeof phishingSmtpConfigsTable.$inferSelect;
 
 export type PhishingCampaign = typeof phishingCampaignsTable.$inferSelect;
 export type InsertPhishingCampaign = typeof phishingCampaignsTable.$inferInsert;

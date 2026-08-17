@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Mail, Users, MousePointerClick, ChevronRight, Play, CheckCircle2, FileText, Building2 } from "lucide-react";
+import { Plus, Mail, Users, MousePointerClick, ChevronRight, Play, CheckCircle2, FileText, Building2, Settings2 } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -32,6 +32,7 @@ type Campaign = {
 };
 
 type Tenant = { id: string; displayName: string; primaryDomain: string | null; status: string };
+type SmtpConfig = { id: string; displayName: string; email: string; status: string };
 
 const STATUS_CONFIG = {
   draft: { label: "Rascunho", variant: "secondary" as const },
@@ -78,6 +79,12 @@ export default function PhishingCampaigns() {
   });
   const connectedTenants = tenants.filter((t) => t.status === "connected");
 
+  const { data: smtpConfigs = [] } = useQuery<SmtpConfig[]>({
+    queryKey: ["phishing-smtp"],
+    queryFn: () => apiFetch("/phishing/smtp"),
+  });
+  const verifiedSmtp = smtpConfigs.filter((s) => s.status === "verified");
+
   const createCampaign = useMutation({
     mutationFn: (data: typeof form) =>
       apiFetch("/phishing/campaigns", {
@@ -107,6 +114,12 @@ export default function PhishingCampaigns() {
           <p className="text-muted-foreground text-sm mt-1">Crie campanhas para testar e treinar funcionários contra ataques de phishing.</p>
         </div>
         <div className="flex gap-2">
+          <Link href="/phishing/smtp">
+            <Button variant="outline" className="gap-2">
+              <Settings2 className="h-4 w-4" />
+              SMTP
+            </Button>
+          </Link>
           <Link href="/phishing/employees">
             <Button variant="outline" className="gap-2">
               <Users className="h-4 w-4" />
@@ -156,15 +169,45 @@ export default function PhishingCampaigns() {
                   <Label>Descrição</Label>
                   <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Objetivo da campanha" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label>Nome do remetente *</Label>
-                    <Input value={form.senderName} onChange={(e) => setForm((f) => ({ ...f, senderName: e.target.value }))} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>E-mail do remetente *</Label>
-                    <Input type="email" value={form.senderEmail} onChange={(e) => setForm((f) => ({ ...f, senderEmail: e.target.value }))} placeholder="ti@empresa.com.br" />
-                  </div>
+                <div className="space-y-2">
+                  <Label>E-mail remetente (SMTP) *</Label>
+                  {verifiedSmtp.length === 0 ? (
+                    <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                      Nenhum SMTP verificado.{" "}
+                      <Link href="/phishing/smtp" className="text-primary underline-offset-4 hover:underline">
+                        Cadastre um e-mail SMTP
+                      </Link>{" "}
+                      antes de criar campanhas.
+                    </div>
+                  ) : (
+                    <Select
+                      value={form.senderEmail}
+                      onValueChange={(v) => {
+                        const cfg = verifiedSmtp.find((s) => s.email === v);
+                        setForm((f) => ({ ...f, senderEmail: v, senderName: cfg?.displayName ?? f.senderName }));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione o e-mail remetente..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {verifiedSmtp.map((s) => (
+                          <SelectItem key={s.id} value={s.email}>
+                            {s.displayName} &lt;{s.email}&gt;
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>Nome do remetente *</Label>
+                  <Input
+                    value={form.senderName}
+                    onChange={(e) => setForm((f) => ({ ...f, senderName: e.target.value }))}
+                    placeholder="Ex: Suporte TI, Microsoft Security..."
+                  />
+                  <p className="text-xs text-muted-foreground">Nome exibido no campo "De:" do e-mail recebido pelo alvo.</p>
                 </div>
                 <div className="space-y-2">
                   <Label>Nota de autorização * (mín. 10 caracteres)</Label>
@@ -181,7 +224,7 @@ export default function PhishingCampaigns() {
                 <Button variant="outline" onClick={() => setIsNewOpen(false)}>Cancelar</Button>
                 <Button
                   onClick={() => createCampaign.mutate(form)}
-                  disabled={createCampaign.isPending || !form.name || !form.senderEmail || form.authorizationNote.length < 10}
+                  disabled={createCampaign.isPending || !form.name || !form.senderEmail || !form.senderName || form.authorizationNote.length < 10}
                 >
                   {createCampaign.isPending ? "Criando..." : "Criar Campanha"}
                 </Button>
