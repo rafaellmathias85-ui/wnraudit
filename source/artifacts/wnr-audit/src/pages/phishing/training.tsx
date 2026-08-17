@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useSearch } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -175,7 +175,8 @@ export default function PhishingTraining({ token }: { token: string }) {
 
   const [activeModuleIdx, setActiveModuleIdx] = useState(0);
   const [completedModules, setCompletedModules] = useState<Set<string>>(new Set());
-  const [reportDone, setReportDone] = useState(false);
+  const [arrivedFired, setArrivedFired] = useState(false);
+  const [reportState, setReportState] = useState<"pending" | "sending" | "done">("pending");
 
   const { data, isLoading } = useQuery<TrainingData>({
     queryKey: ["phishing-training", token],
@@ -190,37 +191,63 @@ export default function PhishingTraining({ token }: { token: string }) {
       }),
   });
 
-  // Fire events via POST (JavaScript-only — scanners cannot execute this)
-  useEffect(() => {
-    if (action === "report") {
-      // Came from the email footer "reportar" link → record opened + reported
-      fetch(`/api/phishing/track/${token}/report`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-      })
-        .then(() => setReportDone(true))
-        .catch(() => setReportDone(true));
-    } else {
-      // Came from the phishing link button → record opened + clicked
-      fetch(`/api/phishing/track/${token}/arrived`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-      }).catch(() => {});
-    }
-  }, [token, action]);
+  // Fired only when the user explicitly clicks the "Entendi" button.
+  // Scanners follow links but do not click arbitrary buttons inside pages,
+  // so this is the only reliable way to distinguish a human from ATP/Safe-Links.
+  const fireArrived = () => {
+    if (arrivedFired) return;
+    setArrivedFired(true);
+    fetch(`/api/phishing/track/${token}/arrived`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ humanVerified: true }),
+    }).catch(() => {});
+  };
 
-  // Show report confirmation screen (with loading state while POST fires)
+  const fireReport = () => {
+    if (reportState !== "pending") return;
+    setReportState("sending");
+    fetch(`/api/phishing/track/${token}/report`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ humanVerified: true }),
+    })
+      .then(() => setReportState("done"))
+      .catch(() => setReportState("done"));
+  };
+
+  // Report flow: require explicit button click before registering the event.
+  // Scanners follow the report-email link but won't click the confirm button.
   if (action === "report") {
-    if (!reportDone || isLoading) {
-      return (
-        <div className="min-h-screen flex items-center justify-center p-6">
-          <Skeleton className="h-64 w-full max-w-md" />
-        </div>
-      );
+    if (reportState === "done") {
+      return <ReportedConfirmation employeeName={data?.employeeName} />;
     }
-    return <ReportedConfirmation employeeName={data?.employeeName} />;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-6">
+        <div className="max-w-md w-full text-center space-y-6">
+          <div className="text-7xl">🛡️</div>
+          <h1 className="text-2xl font-bold text-green-700">Boa atitude!</h1>
+          <p className="text-muted-foreground leading-relaxed">
+            Você tentou reportar este e-mail ao departamento de TI — isso é exatamente o comportamento esperado em um teste de phishing.
+          </p>
+          <p className="text-muted-foreground leading-relaxed">
+            Clique no botão abaixo para <strong className="text-foreground">confirmar seu reporte</strong> e registrá-lo oficialmente.
+          </p>
+          <Button
+            size="lg"
+            className="w-full bg-green-600 hover:bg-green-700"
+            disabled={reportState === "sending"}
+            onClick={fireReport}
+          >
+            <ShieldCheck className="h-5 w-5 mr-2" />
+            {reportState === "sending" ? "Registrando..." : "Confirmar Reporte ao TI"}
+          </Button>
+          {isLoading && <Skeleton className="h-4 w-40 mx-auto" />}
+        </div>
+      </div>
+    );
   }
 
   if (isLoading) {
@@ -236,17 +263,33 @@ export default function PhishingTraining({ token }: { token: string }) {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Alert banner */}
-      <div className="bg-orange-500 text-white px-6 py-4">
-        <div className="max-w-3xl mx-auto flex items-start gap-3">
-          <AlertTriangle className="h-6 w-6 shrink-0 mt-0.5" />
-          <div>
-            <strong className="text-lg">Você clicou em um link de simulação de phishing!</strong>
-            <p className="text-sm opacity-90 mt-1">
-              Isso foi um teste de segurança autorizado pelo seu departamento de TI. Nenhum dado foi capturado.
-              Reserve alguns minutos para revisar o conteúdo de treinamento abaixo.
-            </p>
+      {/* Alert banner — the confirm button is the ONLY trigger for recording the event */}
+      <div className="bg-orange-500 text-white px-6 py-5">
+        <div className="max-w-3xl mx-auto flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="flex items-start gap-3 flex-1">
+            <AlertTriangle className="h-6 w-6 shrink-0 mt-0.5" />
+            <div>
+              <strong className="text-lg">Você clicou em um link de simulação de phishing!</strong>
+              <p className="text-sm opacity-90 mt-1">
+                Isso foi um teste de segurança autorizado pelo seu departamento de TI. Nenhum dado foi capturado.
+                Reserve alguns minutos para revisar o conteúdo de treinamento abaixo.
+              </p>
+            </div>
           </div>
+          {!arrivedFired && (
+            <button
+              onClick={fireArrived}
+              className="shrink-0 bg-white text-orange-600 font-semibold text-sm px-5 py-2.5 rounded-lg hover:bg-orange-50 transition-colors whitespace-nowrap"
+            >
+              Entendi — Iniciar Treinamento →
+            </button>
+          )}
+          {arrivedFired && (
+            <div className="shrink-0 flex items-center gap-2 bg-white/20 text-white text-sm px-4 py-2 rounded-lg">
+              <Check className="h-4 w-4" />
+              Confirmado
+            </div>
+          )}
         </div>
       </div>
 

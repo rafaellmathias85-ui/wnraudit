@@ -13,6 +13,11 @@ import {
 
 const app: Express = express();
 
+// Behind nginx: trust the first proxy hop so req.ip reflects the real client
+// (X-Forwarded-For) instead of 127.0.0.1. Required for phishing scanner IP
+// detection and accurate rate limiting.
+app.set("trust proxy", 1);
+
 app.use(
   pinoHttp({
     logger,
@@ -78,7 +83,7 @@ app.get("/api/healthz", (_req, res) => {
 
 // Public phishing tracking routes must bypass Clerk to avoid __clerk_handshake redirect loops
 // clerkMiddleware() must be instantiated ONCE, not per-request
-const PUBLIC_PHISHING_RE = /^\/api\/phishing\/(track|training)\//;  // report-email is under /track/
+const PUBLIC_PHISHING_RE = /^\/api\/phishing\/(track|training|capture-info)\//;
 const clerkMw = clerkMiddleware();
 app.use((req, res, next) => {
   if (PUBLIC_PHISHING_RE.test(req.path)) return next();

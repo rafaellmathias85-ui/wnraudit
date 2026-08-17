@@ -761,6 +761,7 @@ router.post(
         employeeEmail: phishingEmployeesTable.email,
         templateSubject: phishingTemplatesTable.subject,
         templateHtml: phishingTemplatesTable.htmlBody,
+        templateCategory: phishingTemplatesTable.category,
       })
       .from(phishingCampaignTargetsTable)
       .innerJoin(
@@ -816,9 +817,15 @@ router.post(
             .update(phishingCampaignTargetsTable)
             .set({ sentAt: new Date() })
             .where(eq(phishingCampaignTargetsTable.id, target.id));
+          const captureStyle =
+            target.templateCategory ??
+            (campaignTemplateId?.startsWith("builtin-")
+              ? (BUILTIN_TEMPLATES[parseInt(campaignTemplateId.replace("builtin-", ""), 10)]?.category ?? "generic")
+              : "generic");
           await db.insert(phishingEventsTable).values({
             targetId: target.id,
             eventType: "sent",
+            metadata: { captureStyle },
           });
         } catch (err) {
           logger.error({ err, targetId: target.id }, "Failed to send phishing email");
@@ -884,15 +891,44 @@ router.get(
       .where(eq(phishingCampaignTargetsTable.campaignId, campaignId));
 
     const events = await db
-      .select({ targetId: phishingEventsTable.targetId, eventType: phishingEventsTable.eventType })
+      .select({
+        targetId: phishingEventsTable.targetId,
+        eventType: phishingEventsTable.eventType,
+        humanVerified: phishingEventsTable.humanVerified,
+        occurredAt: phishingEventsTable.occurredAt,
+      })
       .from(phishingEventsTable)
-      .where(inArray(phishingEventsTable.targetId, targets.map((t) => t.id)));
+      .where(inArray(phishingEventsTable.targetId, targets.map((t) => t.id)))
+      .orderBy(phishingEventsTable.occurredAt);
 
+    // All events (detected — includes scanner/Safe Links signals).
     const eventsByTarget = new Map<string, Set<string>>();
+    // Only human-confirmed events (humanVerified = true).
+    const humanEventsByTarget = new Map<string, Set<string>>();
+    // Timestamp of the first HUMAN-confirmed action (click or credential submit).
+    const actionAtByTarget = new Map<string, Date>();
     for (const e of events) {
       if (!eventsByTarget.has(e.targetId)) eventsByTarget.set(e.targetId, new Set());
       eventsByTarget.get(e.targetId)!.add(e.eventType);
+      if (e.humanVerified) {
+        if (!humanEventsByTarget.has(e.targetId)) humanEventsByTarget.set(e.targetId, new Set());
+        humanEventsByTarget.get(e.targetId)!.add(e.eventType);
+        if (
+          (e.eventType === "clicked" || e.eventType === "submitted") &&
+          !actionAtByTarget.has(e.targetId) &&
+          e.occurredAt
+        ) {
+          actionAtByTarget.set(e.targetId, e.occurredAt as Date);
+        }
+      }
     }
+
+    // Human-confirmed metrics — separate from the raw detected metrics above.
+    const humanClicked = targets.filter((t) => {
+      const evs = humanEventsByTarget.get(t.id);
+      return evs?.has("clicked") || evs?.has("submitted");
+    }).length;
+    const humanSubmitted = targets.filter((t) => humanEventsByTarget.get(t.id)?.has("submitted")).length;
 
     const getStatus = (evs: Set<string>) => {
       if (evs.has("submitted")) return { label: "Submeteu credenciais", badge: "critical", color: "#c62828" };
@@ -982,6 +1018,25 @@ body{font-family:Arial,sans-serif;color:#222;background:#fff;font-size:13px}
 .risk-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:6px;font-weight:700;font-size:14px;color:#fff}
 .risk-pct{font-size:12px;color:#6b7280}
 
+/* Human-confirmed action alert */
+.human-alert{margin-top:18px;border:1px solid #fca5a5;background:#fef2f2;border-radius:8px;padding:14px 18px}
+.human-alert-head{font-size:14px;font-weight:800;color:#b91c1c;letter-spacing:0.2px}
+.human-alert-sub{font-size:11px;color:#7f1d1d;margin-top:2px;margin-bottom:8px}
+.human-alert-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.human-alert-list li{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;padding:6px 10px;background:#fff;border:1px solid #fecaca;border-radius:6px}
+.ha-name{font-weight:700;color:#111}
+.ha-mail{color:#6b7280}
+.ha-tag{margin-left:auto;padding:2px 10px;border-radius:20px;font-size:10px;font-weight:700}
+.ha-high{background:#e6510018;color:#e65100}
+.ha-crit{background:#c6282818;color:#c62828}
+.ha-time{color:#b91c1c;font-weight:700;font-variant-numeric:tabular-nums}
+.human-ok{margin-top:18px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;padding:12px 16px;font-size:12px;color:#166534}
+
+/* Human-actions metric block */
+.human-note{font-size:11px;color:#6b7280;margin:-8px 0 14px;line-height:1.5}
+.stats-human{grid-template-columns:repeat(3,1fr)}
+.stat-human{background:#fff;border:1px solid #fecaca;border-left:3px solid #b91c1c}
+
 /* Table */
 table{width:100%;border-collapse:collapse}
 thead tr{background:#f1f5f9}
@@ -1052,19 +1107,71 @@ tbody tr:hover td{background:#f8fafc}
     <span class="risk-badge" style="background:${riskColor}">${riskLabel}</span>
     <span class="risk-pct">${riskPct}% dos alvos clicaram no link ou submeteram credenciais</span>
   </div>
+  ${(() => {
+    // Human-confirmed actions (click or credential submit). Only events flagged
+    // humanVerified=true count here — scanner / Safe Links signals are excluded,
+    // so every entry is a real person.
+    const confirmed = targets
+      .filter((t) => {
+        const evs = humanEventsByTarget.get(t.id);
+        return evs?.has("clicked") || evs?.has("submitted");
+      })
+      .map((t) => ({
+        name: t.employeeName,
+        email: t.employeeEmail,
+        at: actionAtByTarget.get(t.id) ?? null,
+        submitted: humanEventsByTarget.get(t.id)?.has("submitted") ?? false,
+      }))
+      .sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
+
+    if (confirmed.length === 0) {
+      return `<div class="human-ok">
+        <strong>Nenhum clique humano confirmado.</strong> Eventos de scanner / Safe Links foram descartados automaticamente e não contam nas métricas acima.
+      </div>`;
+    }
+
+    const items = confirmed.map((c) => {
+      const tag = c.submitted
+        ? `<span class="ha-tag ha-crit">Submeteu credenciais</span>`
+        : `<span class="ha-tag ha-high">Clicou no link</span>`;
+      return `<li><span class="ha-name">${c.name}</span> <span class="ha-mail">${c.email}</span> ${tag} <span class="ha-time">${c.at ? fmtDate(c.at) : "—"}</span></li>`;
+    }).join("");
+
+    return `<div class="human-alert">
+      <div class="human-alert-head">⚠️ ${confirmed.length} clique(s) humano(s) confirmado(s)</div>
+      <div class="human-alert-sub">Ações reais de pessoas — scanners e detonação do Safe Links já foram filtrados. Horário na data/hora do servidor.</div>
+      <ul class="human-alert-list">${items}</ul>
+    </div>`;
+  })()}
+</div>
+
+<!-- HUMAN ACTIONS (separado das métricas detectadas acima) -->
+<div class="section" style="padding-top:0">
+  <div class="section-title">Ações Humanas Confirmadas</div>
+  <p class="human-note">Contagem de <strong>interações reais de pessoas</strong>. Não inclui scanners de segurança nem a detonação do Microsoft Safe Links — que inflam os números de "Abriram" e "Clicaram" do resumo acima. Use estes valores para a análise de risco real.</p>
+  <div class="stats stats-human">
+    <div class="stat stat-human"><div class="stat-v" style="color:#b91c1c">${humanClicked}</div><div class="stat-l">Cliques humanos</div></div>
+    <div class="stat stat-human"><div class="stat-v" style="color:#7f1d1d">${humanSubmitted}</div><div class="stat-l">Submissões humanas</div></div>
+    <div class="stat stat-human"><div class="stat-v" style="color:#334155">${Math.max(clicked - humanClicked, 0)}</div><div class="stat-l">Cliques de scanner (não humanos)</div></div>
+  </div>
 </div>
 
 <!-- TABLE -->
 <div class="section" style="padding-top:0">
   <div class="section-title">Detalhamento por Funcionário</div>
   <table>
-    <thead><tr><th>#</th><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Resultado</th><th>Enviado em</th></tr></thead>
+    <thead><tr><th>#</th><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Resultado</th><th>Enviado em</th><th>Ação humana em</th></tr></thead>
     <tbody>${targets.map((t, i) => {
       const evs = eventsByTarget.get(t.id) ?? new Set<string>();
       const s = getStatus(evs);
+      const actionAt = actionAtByTarget.get(t.id) ?? null;
+      const actionCell = actionAt
+        ? `<span style="color:#c62828;font-weight:600">${fmtDate(actionAt)}</span>`
+        : `<span style="color:#9ca3af">—</span>`;
       return `<tr><td style="color:#9ca3af">${i + 1}</td><td style="font-weight:600">${t.employeeName}</td><td>${t.employeeEmail}</td><td>${t.employeeDepartment ?? "—"}</td>
 <td><span class="badge" style="background:${s.color}18;color:${s.color}">${s.label}</span></td>
-<td style="color:#6b7280">${t.sentAt ? fmtDate(t.sentAt) : "—"}</td></tr>`;
+<td style="color:#6b7280">${t.sentAt ? fmtDate(t.sentAt) : "—"}</td>
+<td>${actionCell}</td></tr>`;
     }).join("")}</tbody>
   </table>
 </div>
@@ -1086,11 +1193,64 @@ tbody tr:hover td{background:#f8fafc}
 
 // ─── Tracking (public — no auth) ─────────────────────────────────────────────
 
+// User-Agent fragments of known e-mail security scanners / link detonators.
+const SCANNER_UA_PATTERNS = [
+  "microsoft", "msoffice", "ms-office", "office365", "msnbot", "bingpreview",
+  "python-requests", "python/", "curl/", "wget/", "go-http-client",
+  "java/", "okhttp/", "libwww-perl", "axios/", "node-fetch", "got (",
+  "headlesschrome", "headless", "phantomjs", "slurp", "proofpoint",
+  "mimecast", "barracuda", "symantec", "forcepoint", "trendmicro",
+  "cisco", "ironport", "fireeye", "urldefense", "safelinks",
+];
+
+// Published Microsoft / Office 365 datacenter CIDR blocks used by Defender
+// (Safe Links detonation, EOP scanners, Outlook image proxy). Not exhaustive —
+// Microsoft publishes the authoritative list, but these cover the common
+// ranges that hit tracking endpoints. Kept as prefixes for cheap matching.
+const MICROSOFT_IP_PREFIXES = [
+  "40.", "13.", "20.", "52.", "104.", "51.", "137.116.", "168.61.", "168.62.",
+  "168.63.", "191.232.", "191.233.", "191.234.", "191.235.", "191.236.",
+  "191.237.", "191.238.", "191.239.", "23.96.", "23.97.", "23.98.", "23.99.",
+  "23.100.", "23.101.", "23.102.", "23.103.", "65.52.", "65.55.", "70.37.",
+  "94.245.", "111.221.", "131.253.", "132.245.", "157.55.", "157.56.",
+  "207.46.", "207.68.", "213.199.",
+];
+
+function normalizeIp(ip: string | undefined): string {
+  if (!ip) return "";
+  // Strip IPv6-mapped IPv4 prefix and any port suffix.
+  return ip.replace(/^::ffff:/i, "").replace(/:\d+$/, "").trim();
+}
+
+function looksLikeMicrosoftScanner(ip: string | undefined, ua: string | undefined): boolean {
+  const cleanIp = normalizeIp(ip);
+  const uaLower = (ua ?? "").toLowerCase();
+  const uaMatch = SCANNER_UA_PATTERNS.some((p) => uaLower.includes(p));
+  const ipMatch = cleanIp !== "" && MICROSOFT_IP_PREFIXES.some((p) => cleanIp.startsWith(p));
+  return uaMatch || ipMatch;
+}
+
+/**
+ * Records a tracking event. Instead of discarding scanner-triggered hits, we
+ * STORE every event but tag it with `humanVerified`:
+ *   - false → detected signal that may have been generated by a scanner / Safe
+ *     Links detonation / Outlook image proxy (kept for the "detected" metrics).
+ *   - true  → confirmed real human: the client proved a genuine interaction AND
+ *     the origin is not a known scanner / Microsoft datacenter IP and did not
+ *     arrive implausibly fast.
+ *
+ * This makes the two dimensions explicit and lets the report show a separate
+ * "Ações Humanas Confirmadas" block next to the raw metrics.
+ *
+ * `clientHumanClaim` is the interaction proof coming from the training SPA
+ * (genuine pointer/scroll/key/touch). Server-side signals can only DEMOTE it,
+ * never promote — so a scanner claiming humanity is still recorded as false.
+ */
 async function recordEvent(
   token: string,
   eventType: "opened" | "clicked" | "submitted" | "reported",
   metadata?: Record<string, unknown>,
-  skipBotCheck = false,
+  clientHumanClaim = false,
 ) {
   const [target] = await db
     .select()
@@ -1099,38 +1259,38 @@ async function recordEvent(
     .limit(1);
   if (!target) return null;
 
-  // Bot/scanner detection — only for events from email (GET requests from email clients/scanners).
-  // Events fired by the training SPA (POST from useEffect) always set skipBotCheck=true because
-  // JavaScript execution is required — automated scanners cannot trigger those paths.
-  if (!skipBotCheck) {
-    const rawUA = (metadata?.ua as string | undefined) ?? "";
-    const ua = rawUA.toLowerCase();
+  const rawUA = (metadata?.ua as string | undefined) ?? "";
+  const ip = metadata?.ip as string | undefined;
+  const isKnownScanner = looksLikeMicrosoftScanner(ip, rawUA);
+  const msSinceSent = target.sentAt
+    ? Date.now() - new Date(target.sentAt).getTime()
+    : Infinity;
+  const isTooFast = msSinceSent < 10_000;
 
-    // UA patterns of known security scanners
-    const SCANNER_PATTERNS = [
-      "microsoft", "msoffice", "ms-office", "msnbot", "bingpreview",
-      "python-requests", "python/", "curl/", "wget/",
-      "go-http-client", "java/", "okhttp/", "libwww-perl",
-      "axios/", "headlesschrome", "phantomjs", "slurp",
-    ];
-    const isKnownScanner = SCANNER_PATTERNS.some((p) => ua.includes(p));
-    const msSinceSent = target.sentAt
-      ? Date.now() - new Date(target.sentAt).getTime()
-      : Infinity;
-    const isTooFast = msSinceSent < 10_000;
+  // Human only when the client proved interaction AND nothing server-side
+  // contradicts it. Scanners/detonation get recorded with humanVerified=false.
+  const humanVerified = clientHumanClaim && !isKnownScanner && !isTooFast;
 
-    if (isKnownScanner || isTooFast) {
-      logger.info(
-        { token, eventType, ua: rawUA, msSinceSent, isKnownScanner, isTooFast },
-        "Event ignored: likely automated scanner",
-      );
-      return target;
-    }
+  const enrichedMeta = {
+    ...(metadata ?? {}),
+    ip: normalizeIp(ip),
+    isKnownScanner,
+    msSinceSent,
+    humanVerified,
+  };
+
+  if (!humanVerified) {
+    logger.info(
+      { token, eventType, ua: rawUA, ip: normalizeIp(ip), msSinceSent, isKnownScanner, clientHumanClaim },
+      "Event recorded as detected (not human-confirmed)",
+    );
   }
 
-  // Only record if not already recorded (idempotent per type)
+  // Idempotent per (target, eventType). If a later event upgrades the confidence
+  // from detected → human-confirmed, we promote the existing row instead of
+  // inserting a duplicate.
   const [existing] = await db
-    .select({ id: phishingEventsTable.id })
+    .select({ id: phishingEventsTable.id, humanVerified: phishingEventsTable.humanVerified })
     .from(phishingEventsTable)
     .where(
       and(
@@ -1144,16 +1304,25 @@ async function recordEvent(
     await db.insert(phishingEventsTable).values({
       targetId: target.id,
       eventType,
-      metadata: metadata ?? null,
+      humanVerified,
+      metadata: enrichedMeta,
     });
+  } else if (humanVerified && !existing.humanVerified) {
+    await db
+      .update(phishingEventsTable)
+      .set({ humanVerified: true, metadata: enrichedMeta })
+      .where(eq(phishingEventsTable.id, existing.id));
   }
+
   return target;
 }
 
 // Tracking pixel — opened
 router.get("/phishing/track/:token/open", async (req, res): Promise<void> => {
   const token = req.params.token as string;
-  await recordEvent(token, "opened", { ip: req.ip, ua: req.headers["user-agent"] }).catch(
+  // A pixel load can never prove a human (Outlook/Defender prefetch it), so the
+  // open is always recorded as detected-only (humanVerified stays false).
+  await recordEvent(token, "opened", { ip: req.ip, ua: req.headers["user-agent"] }, false).catch(
     () => {},
   );
   // Return 1x1 transparent GIF
@@ -1165,19 +1334,48 @@ router.get("/phishing/track/:token/open", async (req, res): Promise<void> => {
   res.send(gif);
 });
 
-// Tracking click — redirect to training SPA.
-// Events (opened + clicked) are recorded by the SPA's useEffect via POST /arrived.
-// Scanners follow this redirect but cannot execute JavaScript, so they never trigger /arrived.
+// Tracking click — redirect to capture page (fake login form).
+// The capture page records "submitted" only when the user fills and submits the form.
+// Scanners follow this redirect but do not interact with the form inside the SPA.
 router.get("/phishing/track/:token/click", async (req, res): Promise<void> => {
   const basePath = process.env.BASE_PATH ?? "/wnraudit/app/";
-  res.redirect(302, `${basePath}phishing/training/${encodeURIComponent(req.params.token as string)}`);
+  res.redirect(302, `${basePath}phishing/capture/${encodeURIComponent(req.params.token as string)}`);
 });
 
-// Training SPA arrived — records opened + clicked (JS-only, scanner-proof)
+// Capture page style info — public, no auth required.
+// Returns the visual style the capture page should use based on the campaign template.
+router.get("/phishing/capture-info/:token", async (req, res): Promise<void> => {
+  const [row] = await db
+    .select({ metadata: phishingEventsTable.metadata })
+    .from(phishingEventsTable)
+    .innerJoin(
+      phishingCampaignTargetsTable,
+      eq(phishingEventsTable.targetId, phishingCampaignTargetsTable.id),
+    )
+    .where(
+      and(
+        eq(phishingCampaignTargetsTable.trackingToken, req.params.token as string),
+        eq(phishingEventsTable.eventType, "sent"),
+      ),
+    )
+    .limit(1);
+  const style = (row?.metadata as { captureStyle?: string } | null)?.captureStyle ?? "generic";
+  res.json({ style });
+});
+
+// Training SPA arrived — records opened + clicked.
+// NOTE: Safe Links detonation executes JS, so "JS ran" is NOT proof of a human.
+// The SPA only calls this after a genuine interaction and sends humanVerified.
+// We enforce the scanner/human check here (requireHuman) so sandbox detonations
+// that reach this endpoint without interaction are rejected.
 router.post("/phishing/track/:token/arrived", async (req, res): Promise<void> => {
   const token = req.params.token as string;
-  await recordEvent(token, "opened",  { ip: req.ip, via: "training-spa" }, true).catch(() => {});
-  await recordEvent(token, "clicked", { ip: req.ip, via: "training-spa" }, true).catch(() => {});
+  const clientHumanClaim = (req.body?.humanVerified === true);
+  const base = { ip: req.ip, ua: req.headers["user-agent"], via: "training-spa" };
+  // Both events carry the same human claim; recordEvent demotes it if the origin
+  // looks like a scanner. The click landing implies the mail was opened.
+  await recordEvent(token, "opened",  base, clientHumanClaim).catch(() => {});
+  await recordEvent(token, "clicked", base, clientHumanClaim).catch(() => {});
   res.json({ ok: true });
 });
 
@@ -1189,22 +1387,28 @@ router.get("/phishing/track/:token/report-email", async (req, res): Promise<void
   res.redirect(302, `${basePath}phishing/training/${encodeURIComponent(req.params.token as string)}?action=report`);
 });
 
-// Report as phishing (called from training SPA — JS required, scanner-proof)
+// Report as phishing (called from training SPA). The report footer link is also
+// followed by Safe Links, so we apply the same scanner/human check here.
 router.post("/phishing/track/:token/report", async (req, res): Promise<void> => {
   const token = req.params.token as string;
-  // Reaching this endpoint from the SPA means the email was opened — record both
-  await recordEvent(token, "opened",   { ip: req.ip, via: "training-spa" }, true).catch(() => {});
-  await recordEvent(token, "reported", { ip: req.ip, via: "training-spa" }, true).catch(() => {});
+  const clientHumanClaim = (req.body?.humanVerified === true);
+  const base = { ip: req.ip, ua: req.headers["user-agent"], via: "training-spa" };
+  // Reaching this from a real human means the email was opened — record both.
+  await recordEvent(token, "opened",   base, clientHumanClaim).catch(() => {});
+  await recordEvent(token, "reported", base, clientHumanClaim).catch(() => {});
   res.json({ message: "Obrigado por reportar. Isso é exatamente o que esperamos de você!" });
 });
 
 // Submit credentials (record event only — never store credentials)
 router.post("/phishing/track/:token/submit", async (req, res): Promise<void> => {
   const token = req.params.token as string;
+  // Submitting a form requires human input; treat as a human claim (still demoted
+  // server-side if the origin is a known scanner / Microsoft datacenter IP).
   await recordEvent(token, "submitted", {
     ip: req.ip,
+    ua: req.headers["user-agent"],
     fieldsReceived: Object.keys(req.body ?? {}),
-  }).catch(() => {});
+  }, true).catch(() => {});
 
   // Find the first built-in awareness module to redirect to
   const [module] = await db

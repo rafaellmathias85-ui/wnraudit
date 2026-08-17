@@ -50,6 +50,7 @@ import CampaignDetail from "@/pages/phishing/campaign-detail";
 import PhishingTemplates from "@/pages/phishing/templates";
 import PhishingEmployees from "@/pages/phishing/employees";
 import PhishingTraining from "@/pages/phishing/training";
+import PhishingCapture from "@/pages/phishing/capture";
 import AwarenessModulesList from "@/pages/awareness/list";
 import AwarenessModuleDetail from "@/pages/awareness/module-detail";
 
@@ -383,6 +384,11 @@ function Router() {
         <AuthenticatedRoute>
           <PhishingEmployees />
         </AuthenticatedRoute>
+      </Route>
+
+      {/* Capture page: public (fake login form, no auth required) */}
+      <Route path="/phishing/capture/:token">
+        {(params) => <PhishingCapture token={params.token as string} />}
       </Route>
 
       {/* Training page: public (no auth required) */}

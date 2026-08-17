@@ -92,6 +92,10 @@ export const phishingEventsTable = pgTable("phishing_events", {
     .notNull()
     .references(() => phishingCampaignTargetsTable.id, { onDelete: "cascade" }),
   eventType: phishingEventTypeEnum("event_type").notNull(),
+  // true = ação confirmada de um humano real (interação genuína na página, e a
+  // origem não é um scanner/IP de datacenter Microsoft nem rápida demais).
+  // false = sinal detectado que pode ter sido gerado por scanner/Safe Links.
+  humanVerified: boolean("human_verified").notNull().default(false),
   occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
   metadata: jsonb("metadata"),
 });

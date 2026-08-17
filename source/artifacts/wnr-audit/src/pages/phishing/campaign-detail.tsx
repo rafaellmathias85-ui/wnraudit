@@ -27,7 +27,7 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json();
 }
 
-type Event = { id: string; eventType: string; occurredAt: string };
+type Event = { id: string; eventType: string; occurredAt: string; humanVerified?: boolean };
 type Target = {
   id: string;
   employeeId: string;
@@ -72,13 +72,15 @@ const EVENT_CONFIG: Record<string, { label: string; color: string; Icon: React.E
 };
 
 function getTargetStatus(target: Target): string {
-  // reported is checked before opened: if someone reported without clicking the phishing link,
-  // the green "reported" status takes priority over the synthetic "opened" event we generate
-  // from the report-email click. If they also clicked the phishing link, "clicked" wins.
-  const order = ["submitted", "clicked", "reported", "opened", "sent", "failed"];
-  for (const e of order) {
-    if (target.events.some((ev) => ev.eventType === e)) return e;
-  }
+  // submitted/clicked/opened require humanVerified=true to exclude ATP scanner signals.
+  // reported does NOT require humanVerified: it demands explicit navigation to the training
+  // page + clicking "Confirmar Reporte" — a flow scanners cannot replicate.
+  if (target.events.some((ev) => ev.eventType === "submitted" && ev.humanVerified === true)) return "submitted";
+  if (target.events.some((ev) => ev.eventType === "clicked" && ev.humanVerified === true)) return "clicked";
+  if (target.events.some((ev) => ev.eventType === "reported")) return "reported";
+  if (target.events.some((ev) => ev.eventType === "opened" && ev.humanVerified === true)) return "opened";
+  if (target.events.some((ev) => ev.eventType === "failed")) return "failed";
+  if (target.sentAt) return "sent";
   return "pending";
 }
 
@@ -168,12 +170,25 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
 
   const targets = campaign.targets ?? [];
   const sentCount = targets.filter((t) => t.sentAt).length;
-  // "opened" = pixel loaded OR clicked/submitted — clicking the phishing link implies the email was opened
-  const openedCount = targets.filter((t) => t.events.some((e) => ["opened", "clicked", "submitted"].includes(e.eventType))).length;
-  // "clicked" = clicked OR submitted — submitting credentials implies having clicked
-  const clickedCount = targets.filter((t) => t.events.some((e) => ["clicked", "submitted"].includes(e.eventType))).length;
-  const submittedCount = targets.filter((t) => t.events.some((e) => e.eventType === "submitted")).length;
+  // All counts use only human-verified events (humanVerified=true) to exclude
+  // Microsoft ATP / quarantine scanner signals that load pixels or follow links.
+  const hv = (e: Event) => e.humanVerified === true;
+  const openedCount = targets.filter((t) => t.events.some((e) => hv(e) && ["opened", "clicked", "submitted"].includes(e.eventType))).length;
+  const clickedCount = targets.filter((t) => t.events.some((e) => hv(e) && ["clicked", "submitted"].includes(e.eventType))).length;
+  const submittedCount = targets.filter((t) => t.events.some((e) => hv(e) && e.eventType === "submitted")).length;
   const reportedCount = targets.filter((t) => t.events.some((e) => e.eventType === "reported")).length;
+
+  // Human-confirmed actions — only events flagged humanVerified. These exclude
+  // security-scanner / Safe Links signals, giving the real click/submit numbers.
+  const humanClickedCount = targets.filter((t) =>
+    t.events.some((e) => e.humanVerified && ["clicked", "submitted"].includes(e.eventType)),
+  ).length;
+  const humanSubmittedCount = targets.filter((t) =>
+    t.events.some((e) => e.humanVerified && e.eventType === "submitted"),
+  ).length;
+  const scannerClickedCount = Math.max(clickedCount - humanClickedCount, 0);
+  const isHumanTarget = (t: Target) =>
+    t.events.some((e) => e.humanVerified && ["clicked", "submitted"].includes(e.eventType));
 
   const existingEmployeeIds = new Set(targets.map((t) => t.employeeId));
 
@@ -414,6 +429,37 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
         ))}
       </div>
 
+      {/* Human-confirmed actions — separated from the detected metrics above */}
+      <Card className="border-red-200">
+        <CardHeader className="pb-2 border-b">
+          <CardTitle className="text-sm flex items-center gap-2 text-red-700">
+            <MousePointerClick className="h-4 w-4" />
+            Ações Humanas Confirmadas
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Apenas interações reais de pessoas. Não inclui scanners de segurança nem a
+            detonação do Microsoft Safe Links (que inflam "Abriram" e "Clicaram" acima).
+            Use estes números para a análise de risco real.
+          </p>
+        </CardHeader>
+        <CardContent className="p-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="text-center rounded-md border border-red-200 border-l-[3px] border-l-red-600 py-3">
+              <div className="text-2xl font-bold text-red-700">{humanClickedCount}</div>
+              <div className="text-xs text-muted-foreground">Cliques humanos</div>
+            </div>
+            <div className="text-center rounded-md border border-red-200 border-l-[3px] border-l-red-800 py-3">
+              <div className="text-2xl font-bold text-red-900">{humanSubmittedCount}</div>
+              <div className="text-xs text-muted-foreground">Submissões humanas</div>
+            </div>
+            <div className="text-center rounded-md border border-slate-200 border-l-[3px] border-l-slate-500 py-3">
+              <div className="text-2xl font-bold text-slate-600">{scannerClickedCount}</div>
+              <div className="text-xs text-muted-foreground">Cliques de scanner</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Targets table */}
       <Card>
         <CardHeader className="pb-3 border-b">
@@ -445,6 +491,18 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
                         <cfg.Icon className="h-3.5 w-3.5" />
                         {cfg.label}
                       </div>
+                      {isHumanTarget(t) ? (
+                        <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50 gap-1 h-5">
+                          <MousePointerClick className="h-3 w-3" />
+                          Humano confirmado
+                        </Badge>
+                      ) : (
+                        (status === "clicked" || status === "opened") && (
+                          <span className="text-[11px] text-muted-foreground">
+                            Detectado por scanner (não humano)
+                          </span>
+                        )
+                      )}
                       {t.sentAt && (
                         <div className="text-xs text-muted-foreground">
                           Enviado em {format(new Date(t.sentAt), "dd/MM HH:mm", { locale: ptBR })}
