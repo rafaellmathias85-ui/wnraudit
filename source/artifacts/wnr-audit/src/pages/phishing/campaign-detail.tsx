@@ -173,7 +173,10 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
   // All counts use only human-verified events (humanVerified=true) to exclude
   // Microsoft ATP / quarantine scanner signals that load pixels or follow links.
   const hv = (e: Event) => e.humanVerified === true;
-  const openedCount = targets.filter((t) => t.events.some((e) => hv(e) && ["opened", "clicked", "submitted"].includes(e.eventType))).length;
+  const openedCount = targets.filter((t) =>
+    t.events.some((e) => hv(e) && ["opened", "clicked", "submitted"].includes(e.eventType)) ||
+    t.events.some((e) => e.eventType === "reported")
+  ).length;
   const clickedCount = targets.filter((t) => t.events.some((e) => hv(e) && ["clicked", "submitted"].includes(e.eventType))).length;
   const submittedCount = targets.filter((t) => t.events.some((e) => hv(e) && e.eventType === "submitted")).length;
   const reportedCount = targets.filter((t) => t.events.some((e) => e.eventType === "reported")).length;
