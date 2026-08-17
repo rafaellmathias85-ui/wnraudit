@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
   useListExternalAssets,
+  useDeleteExternalAsset,
   getListExternalAssetsQueryKey,
   ExternalAssetKind,
 } from "@workspace/api-client-react";
@@ -8,7 +10,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Globe, Plus, Wifi } from "lucide-react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Globe, Plus, Wifi, Trash2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -20,11 +24,18 @@ const KIND_LABEL: Record<ExternalAssetKind, string> = {
   other: "Outro",
 };
 
+type AssetSummary = { id: string; name: string };
+
 export default function ExternalList() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  const [deleteTarget, setDeleteTarget] = useState<AssetSummary | null>(null);
+
   const { data, isLoading } = useListExternalAssets({
     query: { queryKey: getListExternalAssetsQueryKey() },
   });
+
+  const deleteAsset = useDeleteExternalAsset();
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -87,7 +98,17 @@ export default function ExternalList() {
                       {asset.port ? `:${asset.port}` : ""}
                     </CardDescription>
                   </div>
-                  <Badge variant="outline">{KIND_LABEL[asset.kind]}</Badge>
+                  <div className="flex items-center gap-1">
+                    <Badge variant="outline">{KIND_LABEL[asset.kind]}</Badge>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget({ id: asset.id, name: asset.name }); }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground space-y-1">
@@ -102,6 +123,43 @@ export default function ExternalList() {
           ))}
         </div>
       )}
+
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Excluir ativo</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground py-2">
+            Tem certeza que deseja excluir o ativo{" "}
+            <span className="font-semibold text-foreground">"{deleteTarget?.name}"</span>?
+            Todos os scans e descobertas associadas serão removidos permanentemente.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteAsset.isPending}
+              onClick={() => {
+                if (!deleteTarget) return;
+                deleteAsset.mutate(
+                  { assetId: deleteTarget.id },
+                  {
+                    onSuccess: () => {
+                      setDeleteTarget(null);
+                      toast({ title: "Ativo excluído" });
+                    },
+                    onError: () => toast({ variant: "destructive", title: "Erro ao excluir" }),
+                  },
+                );
+              }}
+            >
+              {deleteAsset.isPending ? "Excluindo..." : "Excluir"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
