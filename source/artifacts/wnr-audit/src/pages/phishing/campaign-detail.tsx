@@ -446,7 +446,7 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
           </p>
         </CardHeader>
         <CardContent className="p-4">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-3">
             <div className="text-center rounded-md border border-red-200 border-l-[3px] border-l-red-600 py-3">
               <div className="text-2xl font-bold text-red-700">{humanClickedCount}</div>
               <div className="text-xs text-muted-foreground">Cliques humanos</div>
@@ -454,6 +454,10 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
             <div className="text-center rounded-md border border-red-200 border-l-[3px] border-l-red-800 py-3">
               <div className="text-2xl font-bold text-red-900">{humanSubmittedCount}</div>
               <div className="text-xs text-muted-foreground">Submissões humanas</div>
+            </div>
+            <div className="text-center rounded-md border border-green-200 border-l-[3px] border-l-green-600 py-3">
+              <div className="text-2xl font-bold text-green-700">{reportedCount}</div>
+              <div className="text-xs text-muted-foreground">Reportaram</div>
             </div>
             <div className="text-center rounded-md border border-slate-200 border-l-[3px] border-l-slate-500 py-3">
               <div className="text-2xl font-bold text-slate-600">{scannerClickedCount}</div>
