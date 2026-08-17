@@ -29,7 +29,7 @@ function M365Form({ onSubmit }: { onSubmit: () => void }) {
               placeholder="E-mail, telefone ou Skype"
               value={user}
               onChange={(e) => setUser(e.target.value)}
-              style={{ width: "100%", padding: "8px 0", borderBottom: "1px solid #ccc", border: "none", borderBottom: "1px solid #767676", outline: "none", fontSize: 15, marginBottom: 24, boxSizing: "border-box" }}
+              style={{ width: "100%", padding: "8px 0", border: "none", borderBottom: "1px solid #767676", outline: "none", fontSize: 15, marginBottom: 24, boxSizing: "border-box" }}
               autoFocus
             />
             <button

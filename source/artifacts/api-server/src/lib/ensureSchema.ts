@@ -250,6 +250,13 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Phishing events: garantir a coluna human_verified mesmo em bases que
+    // criaram a tabela via drizzle-kit push antes desta coluna existir.
+    await db.execute(sql`
+      ALTER TABLE IF EXISTS "phishing_events"
+        ADD COLUMN IF NOT EXISTS "human_verified" boolean NOT NULL DEFAULT false;
+    `);
+
     logger.info("Schema bootstrap: OK");
   } catch (err) {
     logger.error({ err }, "Schema bootstrap failed");
