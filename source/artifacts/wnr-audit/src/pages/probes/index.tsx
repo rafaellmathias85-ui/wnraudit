@@ -29,11 +29,13 @@ type Probe = {
   createdAt: string;
 };
 
+const _base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${_base}/api${path}`, {
     ...opts,
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", "Accept": "application/json", ...(opts?.headers ?? {}) },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -108,7 +110,7 @@ export default function ProbesList() {
   });
 
   function downloadScript(probe: Probe) {
-    window.open(`/api/probes/${probe.id}/download`, "_blank");
+    window.open(`${_base}/api/probes/${probe.id}/download`, "_blank");
   }
 
   function copyToken(token: string) {
