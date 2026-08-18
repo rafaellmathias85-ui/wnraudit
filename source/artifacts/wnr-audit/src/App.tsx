@@ -54,6 +54,7 @@ import PhishingCapture from "@/pages/phishing/capture";
 import PhishingSmtp from "@/pages/phishing/smtp";
 import AwarenessModulesList from "@/pages/awareness/list";
 import AwarenessModuleDetail from "@/pages/awareness/module-detail";
+import ProbesList from "@/pages/probes";
 
 import { AppShell } from "@/components/layout/app-shell";
 
@@ -401,6 +402,12 @@ function Router() {
       {/* Training page: public (no auth required) */}
       <Route path="/phishing/training/:token">
         {(params) => <PhishingTraining token={params.token as string} />}
+      </Route>
+
+      <Route path="/probes">
+        <AuthenticatedRoute>
+          <ProbesList />
+        </AuthenticatedRoute>
       </Route>
 
       <Route path="/awareness">

@@ -5,6 +5,8 @@ import {
   serverDevicesTable,
   deviceScansTable,
   deviceFindingsTable,
+  probeRegistrationsTable,
+  probeScanJobsTable,
 } from "@workspace/db";
 import { schemas } from "@workspace/api-zod";
 import { requireAuth } from "../middlewares/requireAuth";
@@ -173,30 +175,57 @@ router.post(
       return;
     }
 
+    // Check for an online probe for this customer
+    const [onlineProbe] = await db
+      .select({ id: probeRegistrationsTable.id })
+      .from(probeRegistrationsTable)
+      .where(
+        and(
+          eq(probeRegistrationsTable.customerId, customer.id),
+          eq(probeRegistrationsTable.status, "online"),
+        ),
+      )
+      .limit(1);
+
+    const useProbe = onlineProbe && device.ipAddress;
+
     const [scan] = await db
       .insert(deviceScansTable)
       .values({
         deviceId,
         deviceType: "server",
-        status: "running",
+        status: useProbe ? "pending" : "running",
         startedAt: new Date(),
       })
       .returning();
 
-    runServerScan(scan.id)
-      .then(() =>
-        db
-          .update(serverDevicesTable)
-          .set({ lastScanAt: new Date(), updatedAt: new Date() })
-          .where(eq(serverDevicesTable.id, deviceId)),
-      )
-      .catch((err) => {
-        logger.error({ err, scanId: scan.id }, "Server scan failed");
-        db.update(deviceScansTable)
-          .set({ status: "failed", completedAt: new Date() })
-          .where(eq(deviceScansTable.id, scan.id))
-          .catch(() => {});
+    if (useProbe) {
+      await db.insert(probeScanJobsTable).values({
+        probeId: onlineProbe.id,
+        deviceScanId: scan.id,
+        deviceId,
+        deviceType: "server",
+        targetIp: device.ipAddress!,
+        targetHostname: device.hostname ?? null,
+        status: "queued",
       });
+      logger.info({ scanId: scan.id, probeId: onlineProbe.id }, "Server scan queued for probe");
+    } else {
+      runServerScan(scan.id)
+        .then(() =>
+          db
+            .update(serverDevicesTable)
+            .set({ lastScanAt: new Date(), updatedAt: new Date() })
+            .where(eq(serverDevicesTable.id, deviceId)),
+        )
+        .catch((err) => {
+          logger.error({ err, scanId: scan.id }, "Server scan failed");
+          db.update(deviceScansTable)
+            .set({ status: "failed", completedAt: new Date() })
+            .where(eq(deviceScansTable.id, scan.id))
+            .catch(() => {});
+        });
+    }
 
     res.status(201).json(schemas.ListServerScansResponseItem.parse(scan));
   },

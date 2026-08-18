@@ -17,6 +17,7 @@ import adminConsoleRouter from "./adminConsole";
 import phishingRouter from "./phishing";
 import awarenessRouter from "./awareness";
 import remediationChatRouter from "./remediationChat";
+import probeRouter from "./probe";
 
 const router: IRouter = Router();
 
@@ -38,5 +39,6 @@ router.use(adminConsoleRouter);
 router.use(phishingRouter);
 router.use(awarenessRouter);
 router.use(remediationChatRouter);
+router.use(probeRouter);
 
 export default router;

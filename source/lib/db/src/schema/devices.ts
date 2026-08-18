@@ -137,3 +137,49 @@ export const deviceFindingsTable = pgTable("device_findings", {
 
 export type DeviceFinding = typeof deviceFindingsTable.$inferSelect;
 export type InsertDeviceFinding = typeof deviceFindingsTable.$inferInsert;
+
+// ─── Probe (WNR Audit Security Probe) ────────────────────────────────────────
+
+export const probeRegistrationsTable = pgTable("probe_registrations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  customerId: uuid("customer_id")
+    .notNull()
+    .references(() => customersTable.id, { onDelete: "cascade" }),
+  // Token embarcado no script gerado — autenticação Bearer do probe
+  probeToken: text("probe_token").notNull().unique(),
+  // Preenchido pelo probe no primeiro checkin
+  probeMachineId: text("probe_machine_id").unique(),
+  displayName: text("display_name").notNull(),
+  hostname: text("hostname"),
+  ipAddress: text("ip_address"),
+  os: text("os"),
+  agentVersion: text("agent_version"),
+  // pending | online | offline
+  status: text("status").notNull().default("pending"),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type ProbeRegistration = typeof probeRegistrationsTable.$inferSelect;
+
+export const probeScanJobsTable = pgTable("probe_scan_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  probeId: uuid("probe_id")
+    .notNull()
+    .references(() => probeRegistrationsTable.id, { onDelete: "cascade" }),
+  deviceScanId: uuid("device_scan_id")
+    .notNull()
+    .references(() => deviceScansTable.id, { onDelete: "cascade" }),
+  deviceId: uuid("device_id").notNull(),
+  deviceType: deviceTypeEnum("device_type").notNull(),
+  targetIp: text("target_ip").notNull(),
+  targetHostname: text("target_hostname"),
+  // queued | running | completed | failed
+  status: text("status").notNull().default("queued"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  pickedUpAt: timestamp("picked_up_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+});
+
+export type ProbeScanJob = typeof probeScanJobsTable.$inferSelect;

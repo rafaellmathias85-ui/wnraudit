@@ -1011,7 +1011,7 @@ router.post(
           });
         } catch (err) {
           logger.error({ err, targetId: target.id }, "Failed to send phishing email");
-          await db.insert(phishingEventsTable).values({ targetId: target.id, eventType: "failed" }).catch(() => {});
+          // "failed" not tracked as phishing event — send failure is logged above
         }
       }
     })().catch((err) => logger.error({ err }, "Dispatch loop failed"));
@@ -1054,8 +1054,24 @@ router.get(
     const campaignId = req.params.campaignId as string;
 
     const [campaign] = await db
-      .select()
+      .select({
+        id: phishingCampaignsTable.id,
+        customerId: phishingCampaignsTable.customerId,
+        tenantId: phishingCampaignsTable.tenantId,
+        tenantDisplayName: microsoftTenantsTable.displayName,
+        name: phishingCampaignsTable.name,
+        description: phishingCampaignsTable.description,
+        status: phishingCampaignsTable.status,
+        senderName: phishingCampaignsTable.senderName,
+        senderEmail: phishingCampaignsTable.senderEmail,
+        authorizationNote: phishingCampaignsTable.authorizationNote,
+        startedAt: phishingCampaignsTable.startedAt,
+        completedAt: phishingCampaignsTable.completedAt,
+        createdAt: phishingCampaignsTable.createdAt,
+        updatedAt: phishingCampaignsTable.updatedAt,
+      })
       .from(phishingCampaignsTable)
+      .leftJoin(microsoftTenantsTable, eq(phishingCampaignsTable.tenantId, microsoftTenantsTable.id))
       .where(and(eq(phishingCampaignsTable.id, campaignId), eq(phishingCampaignsTable.customerId, customer.id)))
       .limit(1);
     if (!campaign) { res.status(404).send("Campanha não encontrada"); return; }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useUser, useClerk } from "@clerk/react";
-import { LayoutDashboard, Shield, LogOut, Menu, Activity, Server, Flame, HardDrive, Globe, Users, SquareTerminal, Mail, GraduationCap } from "lucide-react";
+import { LayoutDashboard, Shield, LogOut, Menu, Activity, Server, Flame, HardDrive, Globe, Users, SquareTerminal, Mail, GraduationCap, Cpu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ export function AppShell({ children, isSuperAdmin = false }: AppShellProps) {
     { name: "Tenants Microsoft", href: "/tenants", icon: Server },
     { name: "Firewalls", href: "/firewalls", icon: Flame },
     { name: "Servidores", href: "/servers", icon: HardDrive },
+    { name: "Security Probes", href: "/probes", icon: Cpu },
     { name: "Admin Console", href: "/admin-console", icon: SquareTerminal },
     { name: "Superfície Externa", href: "/external", icon: Globe },
     { name: "Simulação Phishing", href: "/phishing", icon: Mail },
