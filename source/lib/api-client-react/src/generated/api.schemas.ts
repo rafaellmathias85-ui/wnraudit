@@ -389,6 +389,7 @@ export type FirewallDeviceDetails = FirewallDevice & {
 export interface CreateFirewallBody {
   /** @minLength 2 */
   name: string;
+  clientLabel?: string;
   manufacturer: FirewallManufacturer;
   model?: string;
   ipAddress?: string;
@@ -419,6 +420,7 @@ export type ServerDeviceDetails = ServerDevice & {
 export interface CreateServerBody {
   /** @minLength 2 */
   name: string;
+  clientLabel?: string;
   /** @minLength 1 */
   hostname: string;
   os: ServerOs;

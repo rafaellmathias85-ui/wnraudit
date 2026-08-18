@@ -47,6 +47,7 @@ export const firewallDevicesTable = pgTable("firewall_devices", {
     .notNull()
     .references(() => customersTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  clientLabel: text("client_label"),
   manufacturer: firewallManufacturerEnum("manufacturer").notNull(),
   model: text("model"),
   ipAddress: text("ip_address"),
@@ -71,6 +72,7 @@ export const serverDevicesTable = pgTable("server_devices", {
     .notNull()
     .references(() => customersTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  clientLabel: text("client_label"),
   hostname: text("hostname").notNull(),
   os: serverOsEnum("os").notNull(),
   osVersion: text("os_version"),

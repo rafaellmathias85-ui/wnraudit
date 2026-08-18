@@ -533,6 +533,7 @@ export const createFirewallBodyNameMin = 2;
 
 export const CreateFirewallBody = zod.object({
   name: zod.string().min(createFirewallBodyNameMin),
+  clientLabel: zod.string().optional(),
   manufacturer: zod.enum([
     "cisco",
     "fortinet",
@@ -736,6 +737,7 @@ export const createServerBodyNameMin = 2;
 
 export const CreateServerBody = zod.object({
   name: zod.string().min(createServerBodyNameMin),
+  clientLabel: zod.string().optional(),
   hostname: zod.string().min(1),
   os: zod.enum([
     "windows-server",

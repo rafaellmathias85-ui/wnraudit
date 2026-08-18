@@ -10,6 +10,7 @@ import type { ServerOs } from "./serverOs";
 export interface CreateServerBody {
   /** @minLength 2 */
   name: string;
+  clientLabel?: string;
   /** @minLength 1 */
   hostname: string;
   os: ServerOs;

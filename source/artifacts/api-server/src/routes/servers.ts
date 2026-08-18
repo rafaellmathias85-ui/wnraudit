@@ -38,6 +38,7 @@ router.post("/servers", requireAuth, async (req, res): Promise<void> => {
     .values({
       customerId: customer.id,
       name: parsed.data.name,
+      clientLabel: parsed.data.clientLabel ?? null,
       hostname: parsed.data.hostname,
       os: parsed.data.os,
       osVersion: parsed.data.osVersion ?? null,

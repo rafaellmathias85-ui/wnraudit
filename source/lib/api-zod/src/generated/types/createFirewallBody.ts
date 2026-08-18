@@ -10,6 +10,7 @@ import type { FirewallManufacturer } from "./firewallManufacturer";
 export interface CreateFirewallBody {
   /** @minLength 2 */
   name: string;
+  clientLabel?: string;
   manufacturer: FirewallManufacturer;
   model?: string;
   ipAddress?: string;

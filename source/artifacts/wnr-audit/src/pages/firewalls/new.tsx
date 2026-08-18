@@ -2,16 +2,18 @@ import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useCreateFirewall, FirewallManufacturer, type ErrorResponse } from "@workspace/api-client-react";
+import { useCreateFirewall, FirewallManufacturer, type ErrorResponse, useListTenants } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
+import { useState } from "react";
 
 const MANUFACTURER_OPTIONS = [
   { value: FirewallManufacturer.cisco, label: "Cisco" },
@@ -28,6 +30,7 @@ const MANUFACTURER_OPTIONS = [
 
 const formSchema = z.object({
   name: z.string().min(2, "Nome deve ter pelo menos 2 caracteres"),
+  clientLabel: z.string().optional(),
   manufacturer: z.nativeEnum(FirewallManufacturer),
   model: z.string().optional(),
   ipAddress: z.string().optional(),
@@ -42,11 +45,15 @@ export default function NewFirewall() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const createFirewall = useCreateFirewall();
+  const { data: tenants = [] } = useListTenants();
+  const [clienteMode, setClienteMode] = useState<"tenant" | "avulso" | "none">("none");
+  const [selectedTenantId, setSelectedTenantId] = useState("");
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
+      clientLabel: "",
       manufacturer: FirewallManufacturer.fortinet,
       model: "",
       ipAddress: "",
@@ -57,8 +64,14 @@ export default function NewFirewall() {
   });
 
   function onSubmit(data: FormValues) {
+    let clientLabel: string | undefined;
+    if (clienteMode === "tenant") {
+      clientLabel = tenants.find((t) => t.id === selectedTenantId)?.displayName;
+    } else if (clienteMode === "avulso") {
+      clientLabel = data.clientLabel?.trim() || undefined;
+    }
     createFirewall.mutate(
-      { data },
+      { data: { ...data, clientLabel } },
       {
         onSuccess: (fw) => {
           toast({
@@ -102,6 +115,59 @@ export default function NewFirewall() {
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              {/* Cliente / Tenant */}
+              <div className="space-y-3">
+                <label className="text-sm font-medium">Cliente (Opcional)</label>
+                <RadioGroup
+                  value={clienteMode}
+                  onValueChange={(v) => { setClienteMode(v as "tenant" | "avulso" | "none"); setSelectedTenantId(""); form.setValue("clientLabel", ""); }}
+                  className="flex flex-wrap gap-4"
+                >
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem value="none" id="fw-mode-none" />
+                    <label htmlFor="fw-mode-none" className="text-sm cursor-pointer">Nenhum</label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem value="tenant" id="fw-mode-tenant" />
+                    <label htmlFor="fw-mode-tenant" className="text-sm cursor-pointer">Tenant cadastrado</label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem value="avulso" id="fw-mode-avulso" />
+                    <label htmlFor="fw-mode-avulso" className="text-sm cursor-pointer">Cliente avulso</label>
+                  </div>
+                </RadioGroup>
+                {clienteMode === "tenant" && (
+                  tenants.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Nenhum tenant cadastrado. Use "Cliente avulso".</p>
+                  ) : (
+                    <Select value={selectedTenantId} onValueChange={setSelectedTenantId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione o tenant..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {tenants.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>{t.displayName}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )
+                )}
+                {clienteMode === "avulso" && (
+                  <FormField
+                    control={form.control}
+                    name="clientLabel"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormControl>
+                          <Input placeholder="Ex: ACME Ltda" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                   control={form.control}

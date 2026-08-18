@@ -38,6 +38,7 @@ router.post("/firewalls", requireAuth, async (req, res): Promise<void> => {
     .values({
       customerId: customer.id,
       name: parsed.data.name,
+      clientLabel: parsed.data.clientLabel ?? null,
       manufacturer: parsed.data.manufacturer,
       model: parsed.data.model ?? null,
       ipAddress: parsed.data.ipAddress ?? null,
