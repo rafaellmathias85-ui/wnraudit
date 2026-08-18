@@ -543,6 +543,9 @@ importers:
       '@replit/vite-plugin-runtime-error-modal':
         specifier: 'catalog:'
         version: 0.0.6
+      '@tailwindcss/oxide-win32-x64-msvc':
+        specifier: ^4.3.3
+        version: 4.3.3
       '@tailwindcss/typography':
         specifier: ^0.5.15
         version: 0.5.19(tailwindcss@4.2.1)
@@ -588,6 +591,9 @@ importers:
       input-otp:
         specifier: ^1.4.2
         version: 1.4.2(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      lightningcss-win32-x64-msvc:
+        specifier: ^1.33.0
+        version: 1.33.0
       lucide-react:
         specifier: 'catalog:'
         version: 0.545.0(react@19.1.0)
@@ -1735,6 +1741,12 @@ packages:
       - '@emnapi/wasi-threads'
       - tslib
 
+  '@tailwindcss/oxide-win32-x64-msvc@4.3.3':
+    resolution: {integrity: sha512-yJ0pwIVc/nYeGoV02WtsN8KYyLQv7kyI2wDnkezyJlGGjkd4QLwDGAwl47YpPJeuI0M0ObaXGSPjvWDPeTPggw==}
+    engines: {node: '>= 20'}
+    cpu: [x64]
+    os: [win32]
+
   '@tailwindcss/oxide@4.2.1':
     resolution: {integrity: sha512-yv9jeEFWnjKCI6/T3Oq50yQEOqmpmpfzG1hcZsAOaXFQPfzWprWrlHSdGPEF3WQTi8zu8ohC9Mh9J470nT5pUw==}
     engines: {node: '>= 20'}
@@ -2642,6 +2654,12 @@ packages:
     cpu: [x64]
     os: [linux]
     libc: [glibc]
+
+  lightningcss-win32-x64-msvc@1.33.0:
+    resolution: {integrity: sha512-OlEICDx/Xl0FqSp4bry8zFnCvGpig3Gl4gCquvYwHuqJKEC1+n9NgDniFvqHGmMv1ZkqDJrDqKKSykTDX+ehuA==}
+    engines: {node: '>= 12.0.0'}
+    cpu: [x64]
+    os: [win32]
 
   lightningcss@1.31.1:
     resolution: {integrity: sha512-l51N2r93WmGUye3WuFoN5k10zyvrVs0qfKBhyC5ogUQ6Ew6JUSswh78mbSO+IU3nTWsyOArqPCcShdQSadghBQ==}
@@ -4638,6 +4656,8 @@ snapshots:
   '@tailwindcss/oxide-wasm32-wasi@4.2.1':
     optional: true
 
+  '@tailwindcss/oxide-win32-x64-msvc@4.3.3': {}
+
   '@tailwindcss/oxide@4.2.1':
     optionalDependencies:
       '@tailwindcss/oxide-linux-x64-gnu': 4.2.1
@@ -5442,6 +5462,8 @@ snapshots:
 
   lightningcss-linux-x64-gnu@1.31.1:
     optional: true
+
+  lightningcss-win32-x64-msvc@1.33.0: {}
 
   lightningcss@1.31.1:
     dependencies:

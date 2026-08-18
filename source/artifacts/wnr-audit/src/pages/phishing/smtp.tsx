@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Mail, Trash2, Pencil, FlaskConical, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { apiFetch } from "@/lib/apiFetch";
 
 type SmtpConfig = {
   id: string;
@@ -47,20 +48,6 @@ const EMPTY_FORM: SmtpForm = {
   smtpUser: "",
   smtpPass: "",
 };
-
-async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...opts,
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? res.statusText);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
-}
 
 const STATUS_CONFIG = {
   pending:  { label: "Pendente",   variant: "secondary" as const, Icon: Clock },

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
+import { apiFetch } from "@/lib/apiFetch";
 
 type CaptureStyle = "m365" | "hr" | "financial" | "it" | "generic";
 
@@ -264,9 +265,8 @@ export default function PhishingCapture({ token }: { token: string }) {
   const interactFired = useRef(false);
 
   useEffect(() => {
-    fetch(`/api/phishing/capture-info/${token}`, { credentials: "include" })
-      .then((r) => r.ok ? r.json() : { style: "generic" })
-      .then((d) => setStyle((d.style as CaptureStyle) ?? "generic"))
+    apiFetch<{ style: CaptureStyle }>(`/phishing/capture-info/${token}`)
+      .then((d) => setStyle(d.style ?? "generic"))
       .catch(() => setStyle("generic"));
   }, [token]);
 
@@ -275,10 +275,8 @@ export default function PhishingCapture({ token }: { token: string }) {
   const handleInteract = () => {
     if (interactFired.current) return;
     interactFired.current = true;
-    fetch(`/api/phishing/track/${token}/interact`, {
+    apiFetch<void>(`/phishing/track/${token}/interact`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ humanVerified: true }),
     }).catch(() => {});
   };
@@ -286,10 +284,8 @@ export default function PhishingCapture({ token }: { token: string }) {
   const handleSubmit = async () => {
     if (submitting) return;
     setSubmitting(true);
-    await fetch(`/api/phishing/track/${token}/submit`, {
+    await apiFetch<void>(`/phishing/track/${token}/submit`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ style }),
     }).catch(() => {});
     navigate(`/phishing/training/${token}`);

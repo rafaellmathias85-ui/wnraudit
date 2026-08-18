@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, BookOpen, Video, HelpCircle, Lock } from "lucide-react";
+import { apiFetch } from "@/lib/apiFetch";
 
 type QuizQuestion = { question: string; options: string[]; correctIndex: number };
 type Module = {
@@ -17,12 +18,6 @@ type Module = {
   videoUrl: string | null;
   quizQuestions: QuizQuestion[] | null;
 };
-
-async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`/api${path}`, { credentials: "include" });
-  if (!res.ok) throw new Error(res.statusText);
-  return res.json();
-}
 
 function SimpleMarkdown({ content }: { content: string }) {
   const lines = content.split("\n");

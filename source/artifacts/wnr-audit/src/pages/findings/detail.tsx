@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ArrowLeft, Clock, ShieldAlert, Server, CheckCircle, Info, FileJson, Link as LinkIcon, Edit, Navigation, ExternalLink, Copy, Check, Bot, Send, Loader2 } from "lucide-react";
+import { apiFetch } from "@/lib/apiFetch";
 import { SeverityBadge } from "@/components/ui/severity-badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { FindingStatus } from "@workspace/api-client-react";
@@ -41,14 +42,10 @@ function RemediationChat({ findingId }: { findingId: string }) {
     setInput("");
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/findings/${findingId}/remediation-chat`, {
+      const data = await apiFetch<{ message: string }>(`/findings/${findingId}/remediation-chat`, {
         method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: newMessages }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
       setMessages((m) => [...m, { role: "assistant", content: data.message }]);
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", content: `Erro ao consultar IA: ${e instanceof Error ? e.message : String(e)}` }]);

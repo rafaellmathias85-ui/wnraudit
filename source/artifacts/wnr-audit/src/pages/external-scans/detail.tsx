@@ -16,6 +16,7 @@ import { ptBR } from "date-fns/locale";
 import { ArrowLeft, Bot, ChevronDown, ChevronUp, FileText, Loader2, Send, XCircle, ShieldAlert, ShieldCheck, CheckCircle, Globe } from "lucide-react";
 import { SeverityBadge } from "@/components/ui/severity-badge";
 import { useToast } from "@/hooks/use-toast";
+import { apiFetch, apiBase } from "@/lib/apiFetch";
 
 const SEVERITY_ORDER: Severity[] = [
   Severity.critical,
@@ -86,13 +87,10 @@ function ControlChat({ findingId }: { findingId: string }) {
     setInput("");
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/device-findings/${findingId}/remediation-chat`, {
+      const data = await apiFetch<{ message?: string }>(`/device-findings/${findingId}/remediation-chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ messages: next }),
       });
-      const data = await res.json();
       if (data.message) {
         setMessages([...next, { role: "assistant", content: data.message }]);
       }
@@ -176,7 +174,7 @@ export default function ExternalScanDetail({ scanId }: { scanId: string }) {
   async function handleGenerateReport() {
     setIsGeneratingReport(true);
     try {
-      const res = await fetch(`/api/external-scans/${scanId}/report`, { credentials: "include" });
+      const res = await fetch(`${apiBase}/api/external-scans/${scanId}/report`, { credentials: "include" });
       if (!res.ok) { toast({ variant: "destructive", title: "Erro ao gerar laudo" }); return; }
       const html = await res.text();
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });

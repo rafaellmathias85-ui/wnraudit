@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Mail, Users, MousePointerClick, ChevronRight, Play, CheckCircle2, FileText, Building2, Settings2, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { apiFetch } from "@/lib/apiFetch";
 
 type Campaign = {
   id: string;
@@ -40,20 +41,6 @@ const STATUS_CONFIG = {
   completed: { label: "Concluída", variant: "outline" as const },
   paused: { label: "Pausada", variant: "secondary" as const },
 };
-
-async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...opts,
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? res.statusText);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
-}
 
 export default function PhishingCampaigns() {
   const { toast } = useToast();

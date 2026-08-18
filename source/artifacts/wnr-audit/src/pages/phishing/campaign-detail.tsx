@@ -12,20 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, CheckCircle2, Users, MousePointerClick, Eye, AlertTriangle, Send, ShieldCheck, Plus, Building2, XCircle, Clock, FileText } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-
-async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...opts,
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? res.statusText);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
-}
+import { apiFetch, apiBase } from "@/lib/apiFetch";
 
 type Event = { id: string; eventType: string; occurredAt: string; humanVerified?: boolean };
 type Target = {
@@ -397,7 +384,7 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
               variant="outline"
               className="gap-2"
               onClick={async () => {
-                const res = await fetch(`/api/phishing/campaigns/${campaignId}/report`, { credentials: "include" });
+                const res = await fetch(`${apiBase}/api/phishing/campaigns/${campaignId}/report`, { credentials: "include" });
                 if (!res.ok) { toast({ variant: "destructive", title: "Erro ao gerar relatório" }); return; }
                 const html = await res.text();
                 const win = window.open("", "_blank");

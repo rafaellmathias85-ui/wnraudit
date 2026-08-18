@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BookOpen, Video, HelpCircle, Lock, ChevronRight, GraduationCap } from "lucide-react";
+import { apiFetch } from "@/lib/apiFetch";
 
 type Module = {
   id: string;
@@ -20,12 +21,6 @@ const TYPE_CONFIG: Record<string, { label: string; icon: React.ElementType; colo
   video: { label: "Vídeo", icon: Video, color: "text-purple-600" },
   quiz: { label: "Quiz", icon: HelpCircle, color: "text-orange-600" },
 };
-
-async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`/api${path}`, { credentials: "include" });
-  if (!res.ok) throw new Error(res.statusText);
-  return res.json();
-}
 
 export default function AwarenessModulesList() {
   const { data: modules = [], isLoading } = useQuery<Module[]>({

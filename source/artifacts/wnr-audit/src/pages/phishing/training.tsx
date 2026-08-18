@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle, ShieldCheck, BookOpen, ChevronRight, Check, X } from "lucide-react";
+import { apiFetch } from "@/lib/apiFetch";
 
 type QuizQuestion = { question: string; options: string[]; correctIndex: number };
 type Module = {
@@ -18,16 +19,6 @@ type Module = {
   quizQuestions: QuizQuestion[] | null;
 };
 type TrainingData = { employeeName: string; modules: Module[] };
-
-async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...opts,
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
-  });
-  if (!res.ok) return undefined as T;
-  return res.json();
-}
 
 function SimpleMarkdown({ content }: { content: string }) {
   const lines = content.split("\n");
@@ -197,10 +188,8 @@ export default function PhishingTraining({ token }: { token: string }) {
   const fireArrived = () => {
     if (arrivedFired) return;
     setArrivedFired(true);
-    fetch(`/api/phishing/track/${token}/arrived`, {
+    apiFetch<void>(`/phishing/track/${token}/arrived`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ humanVerified: true }),
     }).catch(() => {});
   };
@@ -208,10 +197,8 @@ export default function PhishingTraining({ token }: { token: string }) {
   const fireReport = () => {
     if (reportState !== "pending") return;
     setReportState("sending");
-    fetch(`/api/phishing/track/${token}/report`, {
+    apiFetch<void>(`/phishing/track/${token}/report`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ humanVerified: true }),
     })
       .then(() => setReportState("done"))

@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ArrowLeft, Bot, CheckCircle, ChevronDown, ChevronUp, Loader2, Send, XCircle, ShieldAlert, ShieldCheck } from "lucide-react";
+import { apiFetch } from "@/lib/apiFetch";
 import { SeverityBadge } from "@/components/ui/severity-badge";
 
 const SEVERITY_ORDER: Severity[] = [
@@ -88,13 +89,10 @@ function ControlChat({ findingId }: { findingId: string }) {
     setInput("");
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/device-findings/${findingId}/remediation-chat`, {
+      const data = await apiFetch<{ message?: string }>(`/device-findings/${findingId}/remediation-chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ messages: next }),
       });
-      const data = await res.json();
       if (data.message) {
         setMessages([...next, { role: "assistant", content: data.message }]);
       }

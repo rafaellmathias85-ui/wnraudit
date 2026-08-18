@@ -39,6 +39,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/apiFetch";
 
 type Tenant = {
   id: string;
@@ -105,28 +106,6 @@ type FilePreview = {
 
 type AdminEntity = "user" | "group" | "application";
 type DialogMode = "create" | "edit" | "password" | "member";
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-
-  if (response.status === 204) return null as T;
-
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message =
-      data && typeof data === "object" && "error" in data
-        ? String((data as { error: unknown }).error)
-        : `HTTP ${response.status}`;
-    throw new Error(message);
-  }
-  return data as T;
-}
 
 function queryKey(tenantId: string | null, scope: string, extra?: string) {
   return ["admin-console", tenantId, scope, extra ?? ""];
