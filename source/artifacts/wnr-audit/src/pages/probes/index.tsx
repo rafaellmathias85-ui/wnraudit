@@ -7,7 +7,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useListTenants } from "@workspace/api-client-react";
 import {
   Plus, Cpu, Wifi, WifiOff, Clock, Download, Trash2, Copy, AlertTriangle,
 } from "lucide-react";
@@ -52,7 +55,11 @@ export default function ProbesList() {
   const [isNewOpen, setIsNewOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Probe | null>(null);
   const [newProbeResult, setNewProbeResult] = useState<{ id: string; probeToken: string; displayName: string } | null>(null);
+  const [clienteMode, setClienteMode] = useState<"tenant" | "avulso">("tenant");
+  const [selectedTenantId, setSelectedTenantId] = useState("");
   const [displayName, setDisplayName] = useState("");
+
+  const { data: tenants = [] } = useListTenants();
 
   const { data: probes = [], isLoading } = useQuery<Probe[]>({
     queryKey: ["probes"],
@@ -70,10 +77,25 @@ export default function ProbesList() {
       queryClient.invalidateQueries({ queryKey: ["probes"] });
       setIsNewOpen(false);
       setDisplayName("");
+      setSelectedTenantId("");
+      setClienteMode("tenant");
       setNewProbeResult(data);
     },
     onError: (e: Error) => toast({ variant: "destructive", title: "Erro", description: e.message }),
   });
+
+  function getEffectiveName(): string {
+    if (clienteMode === "tenant") {
+      const t = tenants.find((t) => t.id === selectedTenantId);
+      return t?.displayName ?? "";
+    }
+    return displayName.trim();
+  }
+
+  function handleCreate() {
+    const name = getEffectiveName();
+    if (name.length >= 2) createProbe.mutate(name);
+  }
 
   const deleteProbe = useMutation({
     mutationFn: (id: string) => apiFetch(`/probes/${id}`, { method: "DELETE" }),
@@ -207,29 +229,71 @@ export default function ProbesList() {
       )}
 
       {/* New probe dialog */}
-      <Dialog open={isNewOpen} onOpenChange={setIsNewOpen}>
+      <Dialog open={isNewOpen} onOpenChange={(v) => { setIsNewOpen(v); if (!v) { setClienteMode("tenant"); setSelectedTenantId(""); setDisplayName(""); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Novo Security Probe</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label>Nome do probe *</Label>
-              <Input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Ex: Probe — Cliente ACME"
-              />
-              <p className="text-xs text-muted-foreground">
-                Identifique em qual local/cliente este probe será instalado.
-              </p>
-            </div>
+          <div className="space-y-5 py-2">
+            <RadioGroup
+              value={clienteMode}
+              onValueChange={(v) => { setClienteMode(v as "tenant" | "avulso"); setSelectedTenantId(""); setDisplayName(""); }}
+              className="gap-3"
+            >
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="tenant" id="mode-tenant" />
+                <Label htmlFor="mode-tenant" className="cursor-pointer font-normal">
+                  Cliente cadastrado no sistema (tenant)
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="avulso" id="mode-avulso" />
+                <Label htmlFor="mode-avulso" className="cursor-pointer font-normal">
+                  Cliente avulso (sem cadastro)
+                </Label>
+              </div>
+            </RadioGroup>
+
+            {clienteMode === "tenant" ? (
+              <div className="space-y-2">
+                <Label>Selecione o tenant *</Label>
+                {tenants.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nenhum tenant cadastrado. Use "Cliente avulso".</p>
+                ) : (
+                  <Select value={selectedTenantId} onValueChange={setSelectedTenantId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o cliente..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tenants.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.displayName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>Nome do cliente *</Label>
+                <Input
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Ex: Probe — Cliente ACME"
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">
+                  Identifique em qual local/cliente este probe será instalado.
+                </p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsNewOpen(false)}>Cancelar</Button>
             <Button
-              onClick={() => createProbe.mutate(displayName)}
-              disabled={createProbe.isPending || displayName.trim().length < 3}
+              onClick={handleCreate}
+              disabled={createProbe.isPending || getEffectiveName().length < 2}
             >
               {createProbe.isPending ? "Criando..." : "Criar Probe"}
             </Button>
