@@ -23,9 +23,12 @@ async function getProbeTemplate(): Promise<string> {
   return _templateCache;
 }
 
-async function generateProbeScript(token: string): Promise<string> {
+async function generateProbeScript(token: string, displayName: string): Promise<string> {
   const template = await getProbeTemplate();
-  const content  = template.replace("%%PROBE_TOKEN%%", token);
+  const content  = template
+    .replace("%%PROBE_TOKEN%%", token)
+    .replace(/%%DISPLAY_NAME%%/g, displayName)
+    .replace("%%GENERATED_AT%%", new Date().toISOString());
   return signPowerShellScript(content);
 }
 
@@ -305,7 +308,11 @@ router.delete("/probes/:probeId", requireAuth, async (req, res): Promise<void> =
 router.get("/probes/:probeId/download", requireAuth, async (req, res): Promise<void> => {
   const customer = req.customer!;
   const [probe] = await db
-    .select({ id: probeRegistrationsTable.id, probeToken: probeRegistrationsTable.probeToken })
+    .select({
+      id: probeRegistrationsTable.id,
+      probeToken: probeRegistrationsTable.probeToken,
+      displayName: probeRegistrationsTable.displayName,
+    })
     .from(probeRegistrationsTable)
     .where(
       and(
@@ -321,9 +328,11 @@ router.get("/probes/:probeId/download", requireAuth, async (req, res): Promise<v
   }
 
   try {
-    const signed = await generateProbeScript(probe.probeToken);
+    const safeName = probe.displayName.replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const filename = `Instalar_WNRAudit_Probe_${safeName}.ps1`;
+    const signed = await generateProbeScript(probe.probeToken, probe.displayName);
     res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader("Content-Disposition", 'attachment; filename="Instalar_WNRAudit_Probe.ps1"');
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(Buffer.from(signed, "utf-8"));
   } catch (err) {
     logger.error({ err }, "Falha ao gerar/assinar instalador do probe");

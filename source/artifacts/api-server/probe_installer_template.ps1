@@ -1,4 +1,8 @@
 #Requires -Version 2.0
+# WNR Audit Security Probe v1.0
+# Cliente: %%DISPLAY_NAME%%
+# Gerado em: %%GENERATED_AT%%
+# Isolamento: instalacao em C:\Program Files\WNRAudit-Probe\ — nao conflita com WinnerRMM-Legacy
 <#
 .SYNOPSIS
     WNR Audit Security Probe — Instalador
@@ -8,12 +12,13 @@
     Instala o agente de segurança WNR Audit como tarefa agendada (SYSTEM).
     Requer execução como Administrador.
 
-
-
 #>
 
+param(
+    [switch]$Uninstall
+)
 
-$TOKEN         = "%%PROBE_TOKEN%%"
+$PROBE_TOKEN   = "%%PROBE_TOKEN%%"
 $API_URL       = "https://wnrtecnologia.com.br/wnraudit/api"
 $INSTALL_DIR   = "C:\Program Files\WNRAudit-Probe"
 $AGENT_SCRIPT  = Join-Path $INSTALL_DIR "probe_agent.ps1"
@@ -38,7 +43,17 @@ function Write-Log {
 }
 
 
-if ($TOKEN.Length -lt 32) {
+# ─── Uninstall ───────────────────────────────────────────────────────────────
+if ($Uninstall) {
+    Write-Host "Removendo WNR Audit Security Probe..."
+    schtasks /Delete /TN $TASK_AGENT    /F 2>$null | Out-Null
+    schtasks /Delete /TN $TASK_WATCHDOG /F 2>$null | Out-Null
+    if (Test-Path $INSTALL_DIR) { Remove-Item $INSTALL_DIR -Recurse -Force }
+    Write-Host "Probe removido com sucesso."
+    exit 0
+}
+
+if ($PROBE_TOKEN.Length -lt 32) {
     Write-Host "[ERRO] Token invalido (muito curto). Verifique o token no painel WNR Audit." -ForegroundColor Red
     exit 1
 }
@@ -46,6 +61,7 @@ if ($TOKEN.Length -lt 32) {
 # ─── Install ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== WNR Audit Security Probe ===" -ForegroundColor Cyan
+Write-Host "Cliente : %%DISPLAY_NAME%%"
 Write-Host "API     : $API_URL"
 Write-Host "Destino : $INSTALL_DIR"
 Write-Host ""
@@ -63,7 +79,7 @@ Set-Acl -Path $INSTALL_DIR -AclObject $acl -ErrorAction SilentlyContinue
 
 # Store token encrypted with DPAPI (LocalMachine scope — only decryptable on this machine)
 Add-Type -AssemblyName System.Security
-$tokenBytes = [System.Text.Encoding]::UTF8.GetBytes($TOKEN)
+$tokenBytes = [System.Text.Encoding]::UTF8.GetBytes($PROBE_TOKEN)
 $encrypted  = [System.Security.Cryptography.ProtectedData]::Protect(
     $tokenBytes, $null,
     [System.Security.Cryptography.DataProtectionScope]::LocalMachine
