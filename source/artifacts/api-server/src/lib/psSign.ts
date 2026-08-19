@@ -96,11 +96,14 @@ function sha256Der(node: forge.asn1.Asn1): Buffer {
 export async function signPowerShellScript(scriptContent: string): Promise<string> {
   const { key, cert } = await loadPfx();
 
-  // 1. Hash the script content encoded as UTF-16LE with BOM
-  const bom       = Buffer.from([0xff, 0xfe]);
-  const u16le     = Buffer.from(scriptContent, "utf16le");
-  const withBom   = Buffer.concat([bom, u16le]);
-  const contentHash = createHash("sha256").update(withBom).digest();
+  // 1. Hash the script content encoded as UTF-16LE with BOM.
+  // PowerShell strips the blank line before the SIG block then appends \r\n when
+  // verifying, so we must hash (scriptContent + "\r\n") to match.
+  const bom           = Buffer.from([0xff, 0xfe]);
+  const contentToHash = scriptContent + "\r\n";
+  const u16le         = Buffer.from(contentToHash, "utf16le");
+  const withBom       = Buffer.concat([bom, u16le]);
+  const contentHash   = createHash("sha256").update(withBom).digest();
 
   // 2. Build SpcIndirectDataContent and hash its DER for the messageDigest attribute
   const spcContent = buildSpcIndirectDataContent(contentHash);
@@ -144,13 +147,20 @@ export async function signPowerShellScript(scriptContent: string): Promise<strin
   const rawSig = (key as unknown as { sign(md: forge.md.MessageDigest): string }).sign(md);
 
   // 5. Build SignerInfo
-  const issuerAsn1 = forge.pki.distinguishedNameToAsn1(cert.issuer);
-  const serialHex  = cert.serialNumber.replace(/^0+/, "") || "00";
+  // Extract issuer bytes directly from the parsed certificate ASN.1 to avoid
+  // re-encoding drift (forge.pki.distinguishedNameToAsn1 may not be byte-identical).
+  const certAsn1Raw   = forge.pki.certificateToAsn1(cert);
+  // TBSCertificate is certAsn1Raw.value[0]; issuer is index 3 inside TBS
+  const issuerAsn1    = (certAsn1Raw.value as forge.asn1.Asn1[])[0];
+  const tbsChildren   = (issuerAsn1 as forge.asn1.Asn1 & { value: forge.asn1.Asn1[] }).value;
+  const issuerField   = tbsChildren[3]; // issuer in TBSCertificate
+
+  const serialHex   = cert.serialNumber.replace(/^0+/, "") || "00";
   const serialBytes = serialHex.length % 2 ? "0" + serialHex : serialHex;
 
   const signerInfo = seq(
     int_("01"),                                          // version
-    seq(issuerAsn1, int_(serialBytes)),                  // issuerAndSerialNumber
+    seq(issuerField, int_(serialBytes)),                 // issuerAndSerialNumber
     algSha256(),                                         // digestAlgorithm
     signedAttrsImplicit,                                 // authenticatedAttributes [0]
     seq(oid(OID_RSA),                                    // digestEncryptionAlgorithm
@@ -160,8 +170,7 @@ export async function signPowerShellScript(scriptContent: string): Promise<strin
   );
 
   // 6. Build SignedData
-  const certAsn1 = forge.pki.certificateToAsn1(cert);
-  const certsCxt = forge.asn1.create(forge.asn1.Class.CONTEXT_SPECIFIC, 0, true, [certAsn1]);
+  const certsCxt = forge.asn1.create(forge.asn1.Class.CONTEXT_SPECIFIC, 0, true, [certAsn1Raw]);
 
   const signedData = seq(
     int_("01"),                                          // version
