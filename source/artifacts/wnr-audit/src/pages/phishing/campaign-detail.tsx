@@ -485,17 +485,22 @@ export default function CampaignDetail({ campaignId }: { campaignId: string }) {
                         <cfg.Icon className="h-3.5 w-3.5" />
                         {cfg.label}
                       </div>
-                      {isHumanTarget(t) ? (
+                      {isHumanTarget(t) && (
                         <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50 gap-1 h-5">
                           <MousePointerClick className="h-3 w-3" />
                           Humano confirmado
                         </Badge>
-                      ) : (
-                        (status === "clicked" || status === "opened") && (
-                          <span className="text-[11px] text-muted-foreground">
-                            Detectado por scanner (não humano)
-                          </span>
-                        )
+                      )}
+                      {!isHumanTarget(t) && (status === "clicked" || status === "opened") && (
+                        <span className="text-[11px] text-muted-foreground">
+                          Detectado por scanner (não humano)
+                        </span>
+                      )}
+                      {t.events.some((e) => e.eventType === "reported") && (
+                        <Badge variant="outline" className="text-green-700 border-green-300 bg-green-50 gap-1 h-5">
+                          <ShieldCheck className="h-3 w-3" />
+                          Reportou como suspeito
+                        </Badge>
                       )}
                       {t.sentAt && (
                         <div className="text-xs text-muted-foreground">

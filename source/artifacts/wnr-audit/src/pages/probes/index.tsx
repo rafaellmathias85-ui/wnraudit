@@ -126,12 +126,12 @@ export default function ProbesList() {
 
       {/* Token reveal dialog */}
       <Dialog open={!!newToken} onOpenChange={(o) => !o && setNewToken(null)}>
-        <DialogContent>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Probe criado — salve o token</DialogTitle>
             <DialogDescription>
-              O token abaixo está embutido no script de instalação. Baixe o script e execute como Administrador.
-              Este token não será exibido novamente em texto puro.
+              Copie o token abaixo. Ele será necessário ao executar o instalador.
+              Este token não será exibido novamente.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -144,9 +144,15 @@ export default function ProbesList() {
                 </Button>
               </div>
             </div>
-            <p className="text-xs text-muted-foreground bg-muted rounded p-2">
-              Após fechar, baixe o instalador via botão "Instalar" na lista de probes. O token já estará embutido no script.
-            </p>
+            <div className="rounded border bg-muted p-3 space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">Como instalar</p>
+              <p className="text-xs text-muted-foreground">1. Feche este diálogo e clique em <strong>Instalar</strong> na lista para baixar o script assinado com o token embutido.</p>
+              <p className="text-xs text-muted-foreground">2. Execute no cliente como <strong>Administrador</strong>:</p>
+              <code className="block text-xs font-mono bg-background rounded px-2 py-1 mt-1">
+                .\ Instalar_WNRAudit_Probe.ps1
+              </code>
+              <p className="text-xs text-muted-foreground mt-1">O token já está embutido no arquivo baixado — não é necessário passar parâmetros.</p>
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={() => setNewToken(null)}>Fechar</Button>
